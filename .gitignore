@@ -1,5 +1,7 @@
 .env
 backend/.env
+database/.env
+database/node_modules/
 *.db
 service-account*.json
 client_secret*.json
