@@ -1,20 +1,24 @@
 import React, { useEffect, useState } from 'react';
 import { RefreshCw, ExternalLink, AlertTriangle, CheckCircle2 } from 'lucide-react';
 import { apiRequest } from '../api';
-import { DocumentsStatusResponse } from '../types';
+import { formatDateTimeCdmx, normalizeArray } from '../utils/validators';
 import DocumentViewerModal from '../components/DocumentViewerModal';
 
 export default function DocumentosPage() {
-  const [data, setData] = useState<DocumentsStatusResponse | null>(null);
+  const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
   const [syncing, setSyncing] = useState(false);
-  const [viewingDocId, setViewingDocId] = useState<string | null>(null);
+  const [error, setError] = useState('');
+  const [viewingDocId, setViewingDocId] = useState(null);
 
   async function loadDocs() {
     setLoading(true);
+    setError('');
     try {
-      const res = await apiRequest<DocumentsStatusResponse>('/api/documents');
+      const res = await apiRequest('/api/documents');
       setData(res);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'No se pudieron cargar los documentos.');
     } finally {
       setLoading(false);
     }
@@ -26,26 +30,29 @@ export default function DocumentosPage() {
 
   async function triggerSync() {
     setSyncing(true);
+    setError('');
     try {
       await apiRequest('/api/ingestion/sync', { method: 'POST' });
       await loadDocs();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Error al sincronizar con Google Drive.');
     } finally {
       setSyncing(false);
     }
   }
 
-  async function resolveAlert(id: number) {
-    await apiRequest(`/api/documents/alerts/${id}/resolve`, { method: 'POST' });
-    loadDocs();
+  async function resolveAlert(id) {
+    try {
+      await apiRequest(`/api/documents/alerts/${id}/resolve`, { method: 'POST' });
+      loadDocs();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'No se pudo marcar la alerta.');
+    }
   }
 
-  function fmtCdmx(iso?: string | null) {
-    if (!iso) return '—';
-    return new Date(iso).toLocaleString('es-MX', { timeZone: 'America/Mexico_City' });
-  }
-
-  const activeAlerts = data?.alerts.filter((a) => a.status === 'activa' || (!a.resolved && a.status !== 'revisada' && a.status !== 'resuelta')) || [];
-  const historyAlerts = data?.alerts.filter((a) => a.status === 'revisada' || a.status === 'resuelta' || a.resolved) || [];
+  const alerts = normalizeArray(data?.alerts);
+  const activeAlerts = alerts.filter((a) => a.status === 'activa' || (!a.resolved && a.status !== 'revisada' && a.status !== 'resuelta'));
+  const historyAlerts = alerts.filter((a) => a.status === 'revisada' || a.status === 'resuelta' || a.resolved);
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
@@ -53,7 +60,7 @@ export default function DocumentosPage() {
         <div>
           <h1 style={{ margin: '0 0 0.25rem', fontSize: '1.5rem' }}>Estado documental y sincronización Drive</h1>
           <p style={{ margin: 0, color: 'var(--text-secondary)', fontSize: '0.9rem' }}>
-            Última sincronización (CDMX): {fmtCdmx(data?.last_synced_at)} ·{' '}
+            Última sincronización (CDMX): {formatDateTimeCdmx(data?.last_synced_at)} ·{' '}
             {data?.total_active_documents ?? 0} documentos activos · {data?.total_chunks ?? 0} fragmentos indexados
           </p>
         </div>
@@ -62,7 +69,12 @@ export default function DocumentosPage() {
         </button>
       </div>
 
-      {/* Estado actual de sincronización */}
+      {error && (
+        <div role="alert" className="card" style={{ background: 'var(--danger-soft)', color: 'var(--danger)' }}>
+          {error}
+        </div>
+      )}
+
       <section className="card" aria-label="Estado actual de sincronización">
         <h2 style={{ margin: '0 0 0.5rem', fontSize: '1rem', color: activeAlerts.length > 0 ? 'var(--warning)' : 'var(--success)' }}>
           {activeAlerts.length > 0 ? (
@@ -84,7 +96,7 @@ export default function DocumentosPage() {
                 <div style={{ fontSize: '0.86rem' }}>
                   <strong>{a.title}</strong> ({a.alert_type} · {a.occurrence_count}x) — {a.detail}
                   <div style={{ fontSize: '0.76rem', color: 'var(--text-secondary)' }}>
-                    Detectada: {fmtCdmx(a.created_at)} · Última ocurrencia: {fmtCdmx(a.last_seen_at)}
+                    Detectada: {formatDateTimeCdmx(a.created_at)} · Última ocurrencia: {formatDateTimeCdmx(a.last_seen_at)}
                   </div>
                 </div>
                 <button type="button" className="btn btn-secondary" style={{ padding: '0.25rem 0.6rem', fontSize: '0.78rem' }} onClick={() => resolveAlert(a.id)}>
@@ -117,8 +129,8 @@ export default function DocumentosPage() {
                     <td><strong>{a.title}</strong></td>
                     <td>{a.alert_type}</td>
                     <td>{a.occurrence_count}x</td>
-                    <td>{fmtCdmx(a.created_at)}</td>
-                    <td>{fmtCdmx(a.last_seen_at)}</td>
+                    <td>{formatDateTimeCdmx(a.created_at)}</td>
+                    <td>{formatDateTimeCdmx(a.last_seen_at)}</td>
                     <td>
                       <span className={`badge ${a.status === 'resuelta' ? 'badge-success' : 'badge-accent'}`}>
                         {a.status === 'resuelta' ? 'Resuelta' : 'Revisada'}
@@ -133,7 +145,7 @@ export default function DocumentosPage() {
       )}
 
       <section className="card">
-        <h2 style={{ margin: '0 0 0.75rem', fontSize: '1rem' }}>Documentos indexados en pgvector</h2>
+        <h2 style={{ margin: '0 0 0.75rem', fontSize: '1rem' }}>Documentos indexados</h2>
         {loading ? (
           <div>Cargando documentos...</div>
         ) : (
@@ -152,7 +164,7 @@ export default function DocumentosPage() {
                 </tr>
               </thead>
               <tbody>
-                {(data?.documents || []).map((doc) => (
+                {normalizeArray(data?.documents).map((doc) => (
                   <tr key={doc.id}>
                     <td><strong>{doc.policy_code}</strong></td>
                     <td>{doc.title}</td>

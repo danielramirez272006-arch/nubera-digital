@@ -1,18 +1,22 @@
 import React, { useEffect, useState } from 'react';
 import { Lock, Download } from 'lucide-react';
 import { apiRequest } from '../api';
-import { TicketOut } from '../types';
+import { normalizeArray } from '../utils/validators';
 
 export default function TicketsPage() {
-  const [tickets, setTickets] = useState<TicketOut[]>([]);
+  const [tickets, setTickets] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [notesMap, setNotesMap] = useState<Record<number, string>>({});
+  const [error, setError] = useState('');
+  const [notesMap, setNotesMap] = useState({});
 
   async function loadTickets() {
     setLoading(true);
+    setError('');
     try {
-      const res = await apiRequest<TicketOut[]>('/api/tickets');
-      setTickets(res);
+      const res = await apiRequest('/api/tickets');
+      setTickets(normalizeArray(res));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'No se pudieron cargar los tickets.');
     } finally {
       setLoading(false);
     }
@@ -22,24 +26,28 @@ export default function TicketsPage() {
     loadTickets();
   }, []);
 
-  async function updateStatus(id: number, status: 'en_proceso' | 'resuelto' | 'cerrado') {
-    const notes = notesMap[id]?.trim() || `Actualización de estado a ${status}.`;
-    await apiRequest(`/api/tickets/${id}`, {
-      method: 'PATCH',
-      body: JSON.stringify({ status, notes }),
-    });
-    loadTickets();
+  async function updateStatus(id, status) {
+    try {
+      const notes = notesMap[id]?.trim() || `Actualización de estado a ${status}.`;
+      await apiRequest(`/api/tickets/${id}`, {
+        method: 'PATCH',
+        body: JSON.stringify({ status, notes }),
+      });
+      loadTickets();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'No se pudo actualizar el ticket.');
+    }
   }
 
   function exportCsv() {
     const header = ['folio', 'colaborador', 'departamento', 'tema', 'estado', 'responsable', 'sensible'];
     const rows = tickets.map((t) => [
       t.folio,
-      `"${t.employee_name.replace(/"/g, '""')}"`,
-      `"${t.department.replace(/"/g, '""')}"`,
-      `"${t.topic.replace(/"/g, '""')}"`,
+      `"${(t.employee_name || '').replace(/"/g, '""')}"`,
+      `"${(t.department || '').replace(/"/g, '""')}"`,
+      `"${(t.topic || '').replace(/"/g, '""')}"`,
       t.status,
-      `"${t.assigned_to.replace(/"/g, '""')}"`,
+      `"${(t.assigned_to || '').replace(/"/g, '""')}"`,
       t.is_sensitive ? 'si' : 'no',
     ]);
     const csv = [header.join(','), ...rows.map((r) => r.join(','))].join('\n');
@@ -66,6 +74,12 @@ export default function TicketsPage() {
         </button>
       </div>
 
+      {error && (
+        <div role="alert" className="card" style={{ background: 'var(--danger-soft)', color: 'var(--danger)' }}>
+          {error}
+        </div>
+      )}
+
       {loading ? (
         <div className="card">Cargando tickets...</div>
       ) : tickets.length === 0 ? (
@@ -82,7 +96,7 @@ export default function TicketsPage() {
                   {t.is_sensitive && (
                     <span className="badge badge-danger"><Lock size={12} /> Caso sensible</span>
                   )}
-                  <span className="badge badge-accent">{t.status.replace('_', ' ').toUpperCase()}</span>
+                  <span className="badge badge-accent">{String(t.status).replace('_', ' ').toUpperCase()}</span>
                 </div>
               </div>
               <p style={{ margin: '0 0 0.75rem', fontSize: '0.9rem', whiteSpace: 'pre-line' }}>{t.confirmed_summary}</p>

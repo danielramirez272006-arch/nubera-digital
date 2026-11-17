@@ -1,29 +1,10 @@
 import React, { useEffect, useState } from 'react';
 import { X, ExternalLink, FileText } from 'lucide-react';
 import { apiRequest } from '../api';
+import { normalizeArray } from '../utils/validators';
 
-interface DocumentContent {
-  drive_file_id: string;
-  policy_code: string;
-  title: string;
-  mime_type: string;
-  version: string;
-  effective_date: string;
-  owner: string;
-  drive_url: string;
-  status: string;
-  last_synced_at: string;
-  sections: { section: string; content: string }[];
-}
-
-export default function DocumentViewerModal({
-  driveFileId,
-  onClose,
-}: {
-  driveFileId: string | null;
-  onClose: () => void;
-}) {
-  const [doc, setDoc] = useState<DocumentContent | null>(null);
+export default function DocumentViewerModal({ driveFileId, onClose }) {
+  const [doc, setDoc] = useState(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
 
@@ -34,7 +15,7 @@ export default function DocumentViewerModal({
     }
     setLoading(true);
     setError('');
-    apiRequest<DocumentContent>(`/api/documents/${encodeURIComponent(driveFileId)}/content`)
+    apiRequest(`/api/documents/${encodeURIComponent(driveFileId)}/content`)
       .then((res) => setDoc(res))
       .catch((err) => setError(err instanceof Error ? err.message : 'No se pudo cargar el documento.'))
       .finally(() => setLoading(false));
@@ -101,7 +82,7 @@ export default function DocumentViewerModal({
 
         {doc && (
           <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
-            {doc.sections.map((sec, idx) => (
+            {normalizeArray(doc.sections).map((sec, idx) => (
               <section
                 key={idx}
                 style={{
@@ -112,7 +93,7 @@ export default function DocumentViewerModal({
                 }}
               >
                 <h3 style={{ margin: '0 0 0.4rem', fontSize: '0.95rem', color: 'var(--accent)' }}>{sec.section}</h3>
-                <p style={{ margin: 0, fontSize: '0.9rem', lineHeight: 1.55 }}>{sec.content}</p>
+                <p style={{ margin: 0, fontSize: '0.9rem', lineHeight: 1.55, whiteSpace: 'pre-line' }}>{sec.content}</p>
               </section>
             ))}
 

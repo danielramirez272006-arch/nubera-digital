@@ -1,10 +1,10 @@
 import React, { useEffect, useState } from 'react';
 import { RefreshCw, Ticket } from 'lucide-react';
 import { apiRequest } from '../api';
-import { TicketOut } from '../types';
+import { formatDateCdmx, normalizeArray } from '../utils/validators';
 
 export default function MisTicketsPage() {
-  const [tickets, setTickets] = useState<TicketOut[]>([]);
+  const [tickets, setTickets] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
 
@@ -12,8 +12,8 @@ export default function MisTicketsPage() {
     setLoading(true);
     setError('');
     try {
-      const res = await apiRequest<TicketOut[]>('/api/tickets/mine');
-      setTickets(res);
+      const res = await apiRequest('/api/tickets/mine');
+      setTickets(normalizeArray(res));
     } catch (err) {
       setError(err instanceof Error ? err.message : 'No se pudieron cargar tus tickets.');
     } finally {
@@ -41,7 +41,10 @@ export default function MisTicketsPage() {
 
       {error && (
         <div role="alert" className="card" style={{ background: 'var(--danger-soft)', color: 'var(--danger)' }}>
-          {error}
+          <p style={{ margin: '0 0 0.5rem' }}>{error}</p>
+          <button type="button" className="btn btn-secondary" onClick={loadTickets}>
+            <RefreshCw size={14} /> Reintentar
+          </button>
         </div>
       )}
 
@@ -61,9 +64,9 @@ export default function MisTicketsPage() {
                   <strong>{t.folio}</strong> · {t.topic}
                 </div>
                 <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
-                  <span className="badge badge-accent">{t.status.replace('_', ' ').toUpperCase()}</span>
+                  <span className="badge badge-accent">{String(t.status).replace('_', ' ').toUpperCase()}</span>
                   <span style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>
-                    {new Date(t.created_at).toLocaleDateString('es-MX')}
+                    {formatDateCdmx(t.created_at)}
                   </span>
                 </div>
               </div>
@@ -71,7 +74,7 @@ export default function MisTicketsPage() {
               <div style={{ fontSize: '0.82rem', color: 'var(--text-secondary)', borderTop: '1px solid var(--border)', paddingTop: '0.6rem' }}>
                 <strong>Historial de atención (Responsable: {t.assigned_to}):</strong>
                 <ul style={{ margin: '0.35rem 0 0', paddingLeft: '1.1rem' }}>
-                  {t.history.map((h) => (
+                  {normalizeArray(t.history).map((h) => (
                     <li key={h.id}>
                       <strong>{h.action}</strong> ({h.actor_name}): {h.notes}
                     </li>

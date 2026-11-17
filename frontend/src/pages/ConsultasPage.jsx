@@ -11,10 +11,12 @@ import {
   ThumbsDown,
   Ticket,
   CheckCircle2,
+  RefreshCw,
 } from 'lucide-react';
 import { apiRequest } from '../api';
-import { ChatMessage, ConversationItem, TicketOut } from '../types';
+import { validateChatMessage, normalizeArray } from '../utils/validators';
 import DocumentViewerModal from '../components/DocumentViewerModal';
+import MarkdownText from '../components/MarkdownText';
 
 const QUICK_QUESTIONS = [
   { label: 'Vacaciones: anticipación', q: '¿Con cuánta anticipación pido vacaciones?' },
@@ -27,29 +29,29 @@ const QUICK_QUESTIONS = [
 
 export default function ConsultasPage() {
   const [searchParams, setSearchParams] = useSearchParams();
-  const [conversations, setConversations] = useState<ConversationItem[]>([]);
-  const [activeSessionId, setActiveSessionId] = useState<string>('conv-principal');
-  const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const [conversations, setConversations] = useState([]);
+  const [activeSessionId, setActiveSessionId] = useState('conv-principal');
+  const [messages, setMessages] = useState([]);
   const [question, setQuestion] = useState('');
   const [loadingInit, setLoadingInit] = useState(true);
   const [sending, setSending] = useState(false);
   const [error, setError] = useState('');
-  const [ticketDraft, setTicketDraft] = useState<{ topic: string; summary: string } | null>(null);
-  const [createdTicket, setCreatedTicket] = useState<TicketOut | null>(null);
-  const [viewingDocId, setViewingDocId] = useState<string | null>(null);
-  const [expandedSnippets, setExpandedSnippets] = useState<Record<string, boolean>>({});
-  const endRef = useRef<HTMLDivElement | null>(null);
+  const [ticketDraft, setTicketDraft] = useState(null);
+  const [createdTicket, setCreatedTicket] = useState(null);
+  const [viewingDocId, setViewingDocId] = useState(null);
+  const [expandedSnippets, setExpandedSnippets] = useState({});
+  const endRef = useRef(null);
 
-  async function loadHistory(sessionId: string) {
+  async function loadHistory(sessionId) {
     setLoadingInit(true);
     setError('');
     try {
       const [convs, hist] = await Promise.all([
-        apiRequest<ConversationItem[]>('/api/chat/conversations'),
-        apiRequest<ChatMessage[]>(`/api/chat/history?session_id=${encodeURIComponent(sessionId)}`),
+        apiRequest('/api/chat/conversations'),
+        apiRequest(`/api/chat/history?session_id=${encodeURIComponent(sessionId)}`),
       ]);
-      setConversations(convs);
-      setMessages(hist);
+      setConversations(normalizeArray(convs));
+      setMessages(normalizeArray(hist).map(validateChatMessage));
     } catch (err) {
       setError(err instanceof Error ? err.message : 'No se pudo cargar el historial.');
     } finally {
@@ -81,7 +83,7 @@ export default function ConsultasPage() {
     setCreatedTicket(null);
   }
 
-  async function sendQuestion(textToSend?: string) {
+  async function sendQuestion(textToSend) {
     const trimmed = (textToSend ?? question).trim();
     if (!trimmed || sending) return;
 
@@ -91,21 +93,23 @@ export default function ConsultasPage() {
     if (!textToSend) setQuestion('');
 
     try {
-      const res = await apiRequest<ChatMessage>('/api/chat', {
+      const raw = await apiRequest('/api/chat', {
         method: 'POST',
         body: JSON.stringify({ question: trimmed, session_id: activeSessionId }),
       });
+      const res = validateChatMessage(raw);
       setMessages((prev) => [...prev, res]);
-      const convs = await apiRequest<ConversationItem[]>('/api/chat/conversations');
-      setConversations(convs);
+      const convs = await apiRequest('/api/chat/conversations');
+      setConversations(normalizeArray(convs));
     } catch (err) {
+      if (!textToSend) setQuestion(trimmed);
       setError(err instanceof Error ? err.message : 'Ocurrió un error al procesar tu consulta.');
     } finally {
       setSending(false);
     }
   }
 
-  async function sendFeedback(logId: number, helpful: boolean) {
+  async function sendFeedback(logId, helpful) {
     try {
       await apiRequest(`/api/chat/${logId}/feedback`, {
         method: 'POST',
@@ -120,7 +124,7 @@ export default function ConsultasPage() {
   async function confirmTicketCreation() {
     if (!ticketDraft) return;
     try {
-      const t = await apiRequest<TicketOut>('/api/tickets', {
+      const t = await apiRequest('/api/tickets', {
         method: 'POST',
         body: JSON.stringify({
           topic: ticketDraft.topic,
@@ -141,7 +145,7 @@ export default function ConsultasPage() {
         <div>
           <h1 style={{ margin: '0 0 0.25rem', fontSize: '1.5rem' }}>Consultas del colaborador</h1>
           <p style={{ margin: 0, color: 'var(--text-secondary)', fontSize: '0.92rem' }}>
-            Asistente con LangGraph conectado a políticas vigentes en Drive y tus registros personales.
+            Asistente conectado a políticas vigentes en Drive y tus registros personales.
           </p>
         </div>
         <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', flexWrap: 'wrap' }}>
@@ -214,7 +218,7 @@ export default function ConsultasPage() {
                     </span>
                   </div>
 
-                  <div style={{ whiteSpace: 'pre-line' }}>{msg.answer}</div>
+                  <MarkdownText content={msg.answer} />
 
                   {msg.needs_hr_escalation && (
                     <div style={{ marginTop: '0.75rem' }}>
@@ -238,7 +242,7 @@ export default function ConsultasPage() {
                   )}
 
                   {msg.citations && msg.citations.length > 0 && (() => {
-                    const grouped = msg.citations.reduce<Record<string, typeof msg.citations>>((acc, cit) => {
+                    const grouped = msg.citations.reduce((acc, cit) => {
                       const key = cit.drive_file_id || cit.title;
                       if (!acc[key]) acc[key] = [];
                       acc[key].push(cit);
@@ -357,7 +361,6 @@ export default function ConsultasPage() {
           <div ref={endRef} />
         </div>
 
-        {/* Confirmación previa a la creación de ticket */}
         {ticketDraft && (
           <div className="card" style={{ background: '#fffbeb', borderColor: '#f59e0b' }} role="region" aria-label="Confirmación de ticket">
             <h2 style={{ margin: '0 0 0.5rem', fontSize: '1rem' }}>Confirma el resumen para crear tu ticket de RRHH</h2>
@@ -395,9 +398,14 @@ export default function ConsultasPage() {
         )}
 
         {error && (
-          <div role="alert" style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', background: 'var(--danger-soft)', color: 'var(--danger)', padding: '0.6rem 0.85rem', borderRadius: 8, fontSize: '0.86rem' }}>
-            <AlertCircle size={16} aria-hidden="true" />
-            <span>{error}</span>
+          <div role="alert" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '0.5rem', background: 'var(--danger-soft)', color: 'var(--danger)', padding: '0.6rem 0.85rem', borderRadius: 8, fontSize: '0.86rem' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+              <AlertCircle size={16} aria-hidden="true" />
+              <span>{error}</span>
+            </div>
+            <button type="button" className="btn btn-secondary" style={{ padding: '0.25rem 0.6rem', fontSize: '0.78rem' }} onClick={() => loadHistory(activeSessionId)}>
+              <RefreshCw size={13} /> Reintentar
+            </button>
           </div>
         )}
 

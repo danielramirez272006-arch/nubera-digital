@@ -1,19 +1,23 @@
 import React, { useEffect, useState } from 'react';
 import { Check, X, Download } from 'lucide-react';
 import { apiRequest } from '../api';
-import { LeaveRequestOut } from '../types';
+import { normalizeArray } from '../utils/validators';
 
 export default function SolicitudesPage() {
-  const [requests, setRequests] = useState<LeaveRequestOut[]>([]);
+  const [requests, setRequests] = useState([]);
   const [statusFilter, setStatusFilter] = useState('pendiente');
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
 
-  async function loadRequests(st: string) {
+  async function loadRequests(st) {
     setLoading(true);
+    setError('');
     try {
       const qs = st ? `?status_filter=${encodeURIComponent(st)}` : '';
-      const res = await apiRequest<LeaveRequestOut[]>(`/api/requests${qs}`);
-      setRequests(res);
+      const res = await apiRequest(`/api/requests${qs}`);
+      setRequests(normalizeArray(res));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'No se pudieron cargar las solicitudes.');
     } finally {
       setLoading(false);
     }
@@ -23,12 +27,16 @@ export default function SolicitudesPage() {
     loadRequests(statusFilter);
   }, [statusFilter]);
 
-  async function decide(id: number, decision: 'aprobada' | 'rechazada') {
-    await apiRequest(`/api/requests/${id}`, {
-      method: 'PATCH',
-      body: JSON.stringify({ status: decision, approver_notes: `Resuelta por RRHH (${decision}).` }),
-    });
-    loadRequests(statusFilter);
+  async function decide(id, decision) {
+    try {
+      await apiRequest(`/api/requests/${id}`, {
+        method: 'PATCH',
+        body: JSON.stringify({ status: decision, approver_notes: `Resuelta por RRHH (${decision}).` }),
+      });
+      loadRequests(statusFilter);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'No se pudo actualizar la solicitud.');
+    }
   }
 
   function exportCsv() {
@@ -81,6 +89,12 @@ export default function SolicitudesPage() {
         </div>
       </div>
 
+      {error && (
+        <div role="alert" className="card" style={{ background: 'var(--danger-soft)', color: 'var(--danger)' }}>
+          {error}
+        </div>
+      )}
+
       <section className="card">
         {loading ? (
           <div>Cargando solicitudes...</div>
@@ -110,10 +124,10 @@ export default function SolicitudesPage() {
                     <tr key={r.id}>
                       <td><strong>{r.employee_name}</strong></td>
                       <td>{r.department}</td>
-                      <td>{r.request_type.replace('_', ' ')}</td>
+                      <td>{String(r.request_type).replace('_', ' ')}</td>
                       <td>{r.start_date} al {r.end_date}</td>
                       <td>{r.days_count}</td>
-                      <td><span className="badge badge-accent">{r.status.toUpperCase()}</span></td>
+                      <td><span className="badge badge-accent">{String(r.status).toUpperCase()}</span></td>
                       <td>
                         {r.status === 'pendiente' ? (
                           <div style={{ display: 'flex', gap: '0.4rem' }}>

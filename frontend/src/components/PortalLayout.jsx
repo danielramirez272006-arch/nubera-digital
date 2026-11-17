@@ -15,7 +15,7 @@ import {
 } from 'lucide-react';
 import { useAuth } from '../AuthContext';
 
-export default function PortalLayout({ children }: { children: React.ReactNode }) {
+export default function PortalLayout({ children }) {
   const { user, logout, systemStatus } = useAuth();
   const navigate = useNavigate();
   const [mobileOpen, setMobileOpen] = useState(false);
@@ -25,7 +25,7 @@ export default function PortalLayout({ children }: { children: React.ReactNode }
     navigate('/login');
   }
 
-  const navContent = (onItemClick?: () => void) => (
+  const navContent = (onItemClick) => (
     <>
       <div className="brand">
         <div className="brand-mark" aria-hidden="true">ND</div>
@@ -98,7 +98,7 @@ export default function PortalLayout({ children }: { children: React.ReactNode }
 
   return (
     <div className="app-shell">
-      <aside className="sidebar">{navContent()}</aside>
+      <aside className="sidebar">{navContent(undefined)}</aside>
 
       <div className="main-area">
         <header className="mobile-topbar">

@@ -11,31 +11,31 @@ import {
   CartesianGrid,
 } from 'recharts';
 import { ShieldAlert, Calendar, AlertTriangle, RefreshCw, Download } from 'lucide-react';
-import { apiRequest, ApiError } from '../api';
+import { apiRequest } from '../api';
 import { useAuth } from '../AuthContext';
-import { DashboardReport } from '../types';
+import { formatDateCdmx, normalizeArray } from '../utils/validators';
 
 export default function DashboardPage() {
   const { user } = useAuth();
-  const [dates, setDates] = useState<string[]>([]);
+  const [dates, setDates] = useState([]);
   const [selectedDate, setSelectedDate] = useState('');
   const [deptFilter, setDeptFilter] = useState('Todos');
-  const [periodDays, setPeriodDays] = useState<number>(30);
-  const [report, setReport] = useState<DashboardReport | null>(null);
+  const [periodDays, setPeriodDays] = useState(30);
+  const [report, setReport] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [forbidden, setForbidden] = useState(false);
 
-  async function loadReport(dateStr: string) {
+  async function loadReport(dateStr) {
     setLoading(true);
     setError('');
     try {
       const qs = dateStr ? `?report_date=${encodeURIComponent(dateStr)}` : '';
-      const data = await apiRequest<DashboardReport>(`/api/dashboard/report${qs}`);
+      const data = await apiRequest(`/api/dashboard/report${qs}`);
       setReport(data);
       setSelectedDate(data.report_date);
     } catch (err) {
-      if (err instanceof ApiError && err.status === 403) {
+      if (err && err.status === 403) {
         setForbidden(true);
       } else {
         setError(err instanceof Error ? err.message : 'No se pudo cargar el reporte.');
@@ -45,34 +45,40 @@ export default function DashboardPage() {
     }
   }
 
-  useEffect(() => {
+  function loadInitial() {
     if (user && user.role !== 'rrhh') {
       setForbidden(true);
       setLoading(false);
       return;
     }
-
-    apiRequest<string[]>('/api/dashboard/dates')
+    setLoading(true);
+    setError('');
+    apiRequest('/api/dashboard/dates')
       .then((dateList) => {
-        setDates(dateList);
-        return loadReport(dateList[0] || '');
+        const list = normalizeArray(dateList);
+        setDates(list);
+        return loadReport(list[0] || '');
       })
       .catch((err) => {
-        if (err instanceof ApiError && err.status === 403) setForbidden(true);
+        if (err && err.status === 403) setForbidden(true);
         else setError(err instanceof Error ? err.message : 'Error al cargar fechas de reportes.');
         setLoading(false);
       });
+  }
+
+  useEffect(() => {
+    loadInitial();
   }, [user]);
 
   async function handleRefreshToday() {
     setLoading(true);
     setError('');
     try {
-      const data = await apiRequest<DashboardReport>('/api/dashboard/report/generate', { method: 'POST' });
+      const data = await apiRequest('/api/dashboard/report/generate', { method: 'POST' });
       setReport(data);
       setSelectedDate(data.report_date);
-      const dateList = await apiRequest<string[]>('/api/dashboard/dates');
-      setDates(dateList);
+      const dateList = await apiRequest('/api/dashboard/dates');
+      setDates(normalizeArray(dateList));
     } catch (err) {
       setError(err instanceof Error ? err.message : 'No se pudo regenerar el reporte.');
     } finally {
@@ -103,20 +109,20 @@ export default function DashboardPage() {
     );
   }
 
-  const allPending = report?.payload_json?.pending_requests_list || [];
+  const allPending = normalizeArray(report?.payload_json?.pending_requests_list);
   const departments = ['Todos', ...(report?.payload_json?.departments_catalog || Array.from(new Set(allPending.map((p) => p.department))).sort())];
   const filteredPending = deptFilter === 'Todos' ? allPending : allPending.filter((p) => p.department === deptFilter);
   const filteredOver3 = filteredPending.filter((p) => p.is_over_3_days).length;
 
-  const absentRecords = report?.payload_json?.today_absent_records || [];
+  const absentRecords = normalizeArray(report?.payload_json?.today_absent_records);
   const filteredAbsentRecords = deptFilter === 'Todos' ? absentRecords : absentRecords.filter((r) => r.department === deptFilter);
   const filteredAbsencesToday = deptFilter === 'Todos' ? (report?.absences_today ?? 0) : new Set(filteredAbsentRecords.map((r) => r.employee_id)).size;
   const filteredDisabilitiesToday = deptFilter === 'Todos' ? (report?.active_disabilities ?? 0) : new Set(filteredAbsentRecords.filter((r) => r.is_disability).map((r) => r.employee_id)).size;
 
   const filteredByType = deptFilter === 'Todos'
-    ? (report?.payload_json?.absences_by_type || [])
+    ? normalizeArray(report?.payload_json?.absences_by_type)
     : Object.entries(
-        filteredAbsentRecords.reduce<Record<string, Set<number>>>((acc, r) => {
+        filteredAbsentRecords.reduce((acc, r) => {
           if (!acc[r.request_type]) acc[r.request_type] = new Set();
           acc[r.request_type].add(r.employee_id);
           return acc;
@@ -124,10 +130,10 @@ export default function DashboardPage() {
       ).map(([name, s]) => ({ name, value: s.size }));
 
   const filteredByDept = deptFilter === 'Todos'
-    ? (report?.payload_json?.absences_by_department || [])
-    : (report?.payload_json?.absences_by_department || []).filter((d) => d.department === deptFilter);
+    ? normalizeArray(report?.payload_json?.absences_by_department)
+    : normalizeArray(report?.payload_json?.absences_by_department).filter((d) => d.department === deptFilter);
 
-  const trendData = (report?.payload_json?.absences_last_30_days || []).slice(-periodDays);
+  const trendData = normalizeArray(report?.payload_json?.absences_last_30_days).slice(-periodDays);
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
@@ -197,7 +203,10 @@ export default function DashboardPage() {
 
       {error && (
         <div role="alert" className="card" style={{ background: 'var(--danger-soft)', color: 'var(--danger)' }}>
-          {error}
+          <p style={{ margin: '0 0 0.5rem' }}>{error}</p>
+          <button type="button" className="btn btn-secondary" onClick={loadInitial}>
+            <RefreshCw size={14} /> Reintentar
+          </button>
         </div>
       )}
 
@@ -242,7 +251,7 @@ export default function DashboardPage() {
 
           <div className="charts-grid-2">
             <section className="card" aria-label="Tendencia de ausencias">
-              <h2 style={{ margin: '0 0 0.75rem', fontSize: '1rem' }}>Ausencias de los últimos {periodDays} días</h2>
+              <h2 style={{ margin: '0 0 0.75rem', fontSize: '1rem' }}>Ausencias de los últimos {periodDays} días (global)</h2>
               <div style={{ width: '100%', height: 250 }}>
                 <ResponsiveContainer>
                   <AreaChart data={trendData}>
@@ -261,10 +270,10 @@ export default function DashboardPage() {
             </section>
 
             <section className="card" aria-label="Cinco temas más consultados">
-              <h2 style={{ margin: '0 0 0.75rem', fontSize: '1rem' }}>Top 5 temas más consultados</h2>
+              <h2 style={{ margin: '0 0 0.75rem', fontSize: '1rem' }}>Top 5 temas más consultados (global)</h2>
               <div style={{ width: '100%', height: 250 }}>
                 <ResponsiveContainer>
-                  <BarChart data={report.payload_json?.top_5_topics || []} layout="vertical" margin={{ left: 20 }}>
+                  <BarChart data={normalizeArray(report.payload_json?.top_5_topics)} layout="vertical" margin={{ left: 20 }}>
                     <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
                     <XAxis type="number" allowDecimals={false} tick={{ fontSize: 11 }} />
                     <YAxis type="category" dataKey="topic" width={120} tick={{ fontSize: 11 }} />
@@ -342,7 +351,7 @@ export default function DashboardPage() {
               </div>
               <div style={{ fontSize: '0.85rem' }}>
                 <strong style={{ color: 'var(--text-secondary)' }}>Preguntas sin respaldo documental (agrupadas):</strong>
-                {(report.payload_json?.unanswered_questions || []).length === 0 ? (
+                {normalizeArray(report.payload_json?.unanswered_questions).length === 0 ? (
                   <p style={{ color: 'var(--text-secondary)', margin: '0.4rem 0 0' }}>Ninguna registrada.</p>
                 ) : (
                   <ul style={{ paddingLeft: '1.1rem', margin: '0.4rem 0 0', display: 'flex', flexDirection: 'column', gap: '0.35rem' }}>
@@ -351,7 +360,7 @@ export default function DashboardPage() {
                         <span>{q.question}</span>{' '}
                         <span className="badge badge-accent">{q.count || 1}x</span>{' '}
                         <span style={{ color: 'var(--text-secondary)', fontSize: '0.78rem' }}>
-                          ({q.topic} · última: {new Date(q.last_asked_at || q.created_at || '').toLocaleDateString('es-MX', { timeZone: 'America/Mexico_City' })})
+                          ({q.topic} · última: {formatDateCdmx(q.last_asked_at || q.created_at)})
                         </span>
                       </li>
                     ))}
@@ -412,7 +421,7 @@ export default function DashboardPage() {
 
           <section className="card" style={{ fontSize: '0.82rem', color: 'var(--text-secondary)' }}>
             <strong style={{ color: 'var(--text-primary)' }}>Definiciones de indicadores:</strong>{' '}
-            <em>Ausencias de hoy</em> cuenta solicitudes aprobadas vigentes en la fecha de corte (las ausencias de varios días se contabilizan en cada día calendario del intervalo).{' '}
+            <em>Ausencias de hoy</em> cuenta personas únicas con vacaciones, permisos o incapacidades vigentes en la fecha de corte (excluye teletrabajo).{' '}
             <em>Tasa de rotación</em> = (Salidas del mes / Plantilla activa) × 100.{' '}
             <em>Resueltas sin escalar</em> = (Consultas con resultado resuelta / Total de consultas) × 100.
           </section>

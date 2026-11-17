@@ -1,34 +1,51 @@
 import React, { useEffect, useState } from 'react';
 import { Download, RefreshCw } from 'lucide-react';
 import { apiRequest } from '../api';
-import { DashboardReport } from '../types';
+import { normalizeArray } from '../utils/validators';
 
 export default function ReportesPage() {
-  const [dates, setDates] = useState<string[]>([]);
-  const [selected, setSelected] = useState<DashboardReport | null>(null);
+  const [dates, setDates] = useState([]);
+  const [selected, setSelected] = useState(null);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
+
+  async function loadAll() {
+    setLoading(true);
+    setError('');
+    try {
+      const d = normalizeArray(await apiRequest('/api/dashboard/dates'));
+      setDates(d);
+      if (d[0]) {
+        const rep = await apiRequest(`/api/dashboard/report?report_date=${d[0]}`);
+        setSelected(rep);
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'No se pudieron cargar los reportes.');
+    } finally {
+      setLoading(false);
+    }
+  }
 
   useEffect(() => {
-    apiRequest<string[]>('/api/dashboard/dates')
-      .then((d) => {
-        setDates(d);
-        if (d[0]) return apiRequest<DashboardReport>(`/api/dashboard/report?report_date=${d[0]}`);
-        return null;
-      })
-      .then((rep) => {
-        if (rep) setSelected(rep);
-      })
-      .finally(() => setLoading(false));
+    loadAll();
   }, []);
 
-  async function selectDate(d: string) {
-    const rep = await apiRequest<DashboardReport>(`/api/dashboard/report?report_date=${d}`);
-    setSelected(rep);
+  async function selectDate(d) {
+    try {
+      const rep = await apiRequest(`/api/dashboard/report?report_date=${d}`);
+      setSelected(rep);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'No se pudo abrir el reporte.');
+    }
   }
 
   async function regenerateToday() {
-    const rep = await apiRequest<DashboardReport>('/api/dashboard/report/generate', { method: 'POST' });
-    setSelected(rep);
+    try {
+      const rep = await apiRequest('/api/dashboard/report/generate', { method: 'POST' });
+      setSelected(rep);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'No se pudo regenerar el reporte.');
+    }
   }
 
   function downloadCsv() {
@@ -73,6 +90,12 @@ export default function ReportesPage() {
           </button>
         </div>
       </div>
+
+      {error && (
+        <div role="alert" className="card" style={{ background: 'var(--danger-soft)', color: 'var(--danger)' }}>
+          {error}
+        </div>
+      )}
 
       {loading ? (
         <div className="card">Cargando reportes...</div>

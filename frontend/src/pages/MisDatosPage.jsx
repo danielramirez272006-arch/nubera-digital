@@ -2,26 +2,26 @@ import React, { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Calendar, MessageSquare, RefreshCw, Plus } from 'lucide-react';
 import { apiRequest } from '../api';
-import { MyDataResponse } from '../types';
+import { formatDateTimeCdmx, normalizeArray, validateLeaveRequestInput } from '../utils/validators';
 
 export default function MisDatosPage() {
   const navigate = useNavigate();
-  const [data, setData] = useState<MyDataResponse | null>(null);
+  const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [showForm, setShowForm] = useState(false);
-  const [reqType, setReqType] = useState<'vacaciones' | 'permiso_con_goce' | 'permiso_sin_goce' | 'home_office'>('vacaciones');
+  const [reqType, setReqType] = useState('vacaciones');
   const [startDate, setStartDate] = useState('');
   const [endDate, setEndDate] = useState('');
   const [reason, setReason] = useState('');
-  const [formMsg, setFormMsg] = useState<{ type: 'ok' | 'err'; text: string } | null>(null);
+  const [formMsg, setFormMsg] = useState(null);
   const [submitting, setSubmitting] = useState(false);
 
   async function fetchMyData() {
     setLoading(true);
     setError('');
     try {
-      const res = await apiRequest<MyDataResponse>('/api/me/data');
+      const res = await apiRequest('/api/me/data');
       setData(res);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'No se pudieron cargar tus datos.');
@@ -34,13 +34,19 @@ export default function MisDatosPage() {
     fetchMyData();
   }, []);
 
-  function askInChat(query: string) {
+  function askInChat(query) {
     navigate(`/consultas?q=${encodeURIComponent(query)}`);
   }
 
-  async function handleCreateRequest(e: React.FormEvent) {
+  async function handleCreateRequest(e) {
     e.preventDefault();
     setFormMsg(null);
+    const validationError = validateLeaveRequestInput({ requestType: reqType, startDate, endDate });
+    if (validationError) {
+      setFormMsg({ type: 'err', text: validationError });
+      return;
+    }
+
     setSubmitting(true);
     try {
       await apiRequest('/api/requests', {
@@ -81,6 +87,7 @@ export default function MisDatosPage() {
   }
 
   const bal = data?.balances?.[0];
+  const requests = normalizeArray(data?.recent_requests);
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
@@ -88,7 +95,7 @@ export default function MisDatosPage() {
         <div>
           <h1 style={{ margin: '0 0 0.25rem', fontSize: '1.5rem' }}>Mis datos</h1>
           <p style={{ margin: 0, color: 'var(--text-secondary)', fontSize: '0.9rem' }}>
-            Última actualización: {data?.updated_at ? new Date(data.updated_at).toLocaleString('es-MX') : '—'}
+            Última actualización (CDMX): {formatDateTimeCdmx(data?.updated_at)}
           </p>
         </div>
         <button type="button" className="btn btn-secondary" onClick={fetchMyData}>
@@ -123,7 +130,7 @@ export default function MisDatosPage() {
           <div className="kpi-label">Próxima fecha de pago</div>
           <div className="kpi-value" style={{ fontSize: '1.35rem' }}>
             <Calendar size={16} style={{ verticalAlign: 'middle', marginRight: 6 }} />
-            {data?.employee.next_payment_date || '—'}
+            {data?.employee?.next_payment_date || '—'}
           </div>
           <button
             type="button"
@@ -139,7 +146,7 @@ export default function MisDatosPage() {
           <div className="kpi-label">Próxima evaluación de desempeño</div>
           <div className="kpi-value" style={{ fontSize: '1.35rem' }}>
             <Calendar size={16} style={{ verticalAlign: 'middle', marginRight: 6 }} />
-            {data?.employee.next_review_date || '—'}
+            {data?.employee?.next_review_date || '—'}
           </div>
           <button
             type="button"
@@ -153,9 +160,9 @@ export default function MisDatosPage() {
 
         <div className="card">
           <div className="kpi-label">Puesto y antigüedad</div>
-          <div style={{ fontWeight: 600, marginTop: 6 }}>{data?.employee.position}</div>
+          <div style={{ fontWeight: 600, marginTop: 6 }}>{data?.employee?.position}</div>
           <div style={{ fontSize: '0.82rem', color: 'var(--text-secondary)' }}>
-            {data?.employee.department} · Ingreso: {data?.employee.hire_date}
+            {data?.employee?.department} · Ingreso: {data?.employee?.hire_date}
           </div>
         </div>
       </div>
@@ -193,7 +200,7 @@ export default function MisDatosPage() {
           <form onSubmit={handleCreateRequest} style={{ background: 'var(--bg-page)', padding: '1rem', borderRadius: 8, border: '1px solid var(--border)', marginBottom: '1rem', display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: '0.75rem' }}>
             <div>
               <label htmlFor="req-type" style={{ display: 'block', fontSize: '0.82rem', fontWeight: 600, marginBottom: 4 }}>Tipo</label>
-              <select id="req-type" className="input" value={reqType} onChange={(e) => setReqType(e.target.value as typeof reqType)}>
+              <select id="req-type" className="input" value={reqType} onChange={(e) => setReqType(e.target.value)}>
                 <option value="vacaciones">Vacaciones (RH-01: 10 días hábiles antes)</option>
                 <option value="permiso_con_goce">Permiso con goce</option>
                 <option value="permiso_sin_goce">Permiso sin goce</option>
@@ -219,6 +226,7 @@ export default function MisDatosPage() {
             </div>
           </form>
         )}
+
         <div className="table-scroll">
           <table>
             <thead>
@@ -231,19 +239,19 @@ export default function MisDatosPage() {
               </tr>
             </thead>
             <tbody>
-              {(data?.recent_requests || []).length === 0 ? (
+              {requests.length === 0 ? (
                 <tr>
                   <td colSpan={5} style={{ textAlign: 'center', color: 'var(--text-secondary)' }}>
                     No tienes solicitudes registradas.
                   </td>
                 </tr>
               ) : (
-                data!.recent_requests.map((r) => (
+                requests.map((r) => (
                   <tr key={r.id}>
-                    <td>{r.request_type.replace('_', ' ')}</td>
+                    <td>{String(r.request_type).replace('_', ' ')}</td>
                     <td>{r.start_date} al {r.end_date}</td>
                     <td>{r.days_count}</td>
-                    <td><span className="badge badge-accent">{r.status.toUpperCase()}</span></td>
+                    <td><span className="badge badge-accent">{String(r.status).toUpperCase()}</span></td>
                     <td>{r.reason || '—'}</td>
                   </tr>
                 ))

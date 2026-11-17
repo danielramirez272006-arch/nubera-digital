@@ -12,9 +12,13 @@ export default function LoginPage() {
   const [error, setError] = useState('');
   const [submitting, setSubmitting] = useState(false);
 
-  async function handleSubmit(e: React.FormEvent) {
+  async function handleSubmit(e) {
     e.preventDefault();
     setError('');
+    if (!email.trim() || !password.trim()) {
+      setError('Ingresa tu correo corporativo y contraseña.');
+      return;
+    }
     setSubmitting(true);
     try {
       const data = await login(email, password);
@@ -26,7 +30,7 @@ export default function LoginPage() {
     }
   }
 
-  function fillDemo(demoEmail: string, demoPass: string) {
+  function fillDemo(demoEmail, demoPass) {
     setEmail(demoEmail);
     setPassword(demoPass);
     setError('');

@@ -12,7 +12,7 @@ import SolicitudesPage from './pages/SolicitudesPage';
 import TicketsPage from './pages/TicketsPage';
 import DocumentosPage from './pages/DocumentosPage';
 
-function ProtectedRoute({ children }: { children: React.ReactNode }) {
+function ProtectedRoute({ children }) {
   const { user, loading } = useAuth();
   if (loading) {
     return (
