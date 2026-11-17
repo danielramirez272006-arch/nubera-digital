@@ -1,5 +1,8 @@
 .env
 backend/.env
+backend-node/.env
+backend-node/node_modules/
+backend-node/token.json
 database/.env
 database/node_modules/
 database/backups/
