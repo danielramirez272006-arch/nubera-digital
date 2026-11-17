@@ -62,7 +62,7 @@ def generate_daily_report(db: Session, target_date: date | None = None) -> Daily
         tz = ZoneInfo(settings.TIMEZONE)
         target_date = datetime.now(tz).date()
 
-    # 1. Ausencias del día (solicitudes aprobadas que cubren target_date)
+    # 1. Ausencias del día (personas únicas para no duplicar solicitudes solapadas)
     today_leaves = (
         db.query(LeaveRequest, Employee)
         .join(Employee, Employee.id == LeaveRequest.employee_id)
@@ -73,15 +73,15 @@ def generate_daily_report(db: Session, target_date: date | None = None) -> Daily
         )
         .all()
     )
-    absences_today = len(today_leaves)
-    active_disabilities = sum(1 for lr, _ in today_leaves if lr.request_type == "incapacidad")
+    absences_today = len({lr.employee_id for lr, _ in today_leaves})
+    active_disabilities = len({lr.employee_id for lr, _ in today_leaves if lr.request_type == "incapacidad"})
 
-    by_type_map: Dict[str, int] = {}
-    by_dept_map: Dict[str, int] = {}
+    by_type_map: Dict[str, set[int]] = {}
+    by_dept_map: Dict[str, set[int]] = {}
     for lr, emp in today_leaves:
         t_label = lr.request_type.replace("_", " ").capitalize()
-        by_type_map[t_label] = by_type_map.get(t_label, 0) + 1
-        by_dept_map[emp.department] = by_dept_map.get(emp.department, 0) + 1
+        by_type_map.setdefault(t_label, set()).add(lr.employee_id)
+        by_dept_map.setdefault(emp.department, set()).add(lr.employee_id)
 
     # 2. Solicitudes pendientes y >3 días
     pending_rows = (
@@ -130,18 +130,27 @@ def generate_daily_report(db: Session, target_date: date | None = None) -> Daily
     absences_last_30_days = []
     for offset in range(30):
         d = start_30 + timedelta(days=offset)
-        cnt = sum(1 for lr in approved_30 if lr.start_date <= d <= lr.end_date)
+        cnt = len({lr.employee_id for lr in approved_30 if lr.start_date <= d <= lr.end_date})
         absences_last_30_days.append({"date": d.isoformat(), "label": d.strftime("%d/%m"), "absences": cnt})
 
-    # 4. Chat logs (global hasta target_date y día anterior)
-    end_dt = datetime.combine(target_date, datetime.max.time()).replace(tzinfo=timezone.utc)
-    all_chats = db.query(ChatLog).filter(ChatLog.created_at <= end_dt).all()
+    # 4. Chat logs con zona horaria consistente (America/Mexico_City)
+    tz = ZoneInfo(settings.TIMEZONE)
+    end_dt_local = datetime.combine(target_date, datetime.max.time()).replace(tzinfo=tz)
+    end_dt_utc = end_dt_local.astimezone(timezone.utc)
+    all_chats = []
+    for c in db.query(ChatLog).all():
+        if not c.created_at:
+            continue
+        c_dt = c.created_at if c.created_at.tzinfo else c.created_at.replace(tzinfo=timezone.utc)
+        if c_dt <= end_dt_utc:
+            all_chats.append((c, c_dt.astimezone(tz).date()))
+
     total_chats = len(all_chats)
-    resolved_chats = sum(1 for c in all_chats if c.outcome == "resuelta")
+    resolved_chats = sum(1 for c, _ in all_chats if c.outcome == "resuelta")
     resolved_pct = round((resolved_chats / total_chats) * 100.0, 2) if total_chats > 0 else 100.0
 
     topic_counts: Dict[str, int] = {}
-    for c in all_chats:
+    for c, _ in all_chats:
         topic_counts[c.topic] = topic_counts.get(c.topic, 0) + 1
     top_5_topics = [
         {"topic": k, "count": v}
@@ -149,7 +158,7 @@ def generate_daily_report(db: Session, target_date: date | None = None) -> Daily
     ]
 
     prev_day = target_date - timedelta(days=1)
-    prev_chats = [c for c in all_chats if c.created_at and c.created_at.date() == prev_day]
+    prev_chats = [c for c, local_d in all_chats if local_d == prev_day]
     prev_day_chat_volume = len(prev_chats)
     prev_day_avg_latency_ms = (
         int(sum(c.latency_ms for c in prev_chats) / len(prev_chats)) if prev_chats else 0
@@ -161,16 +170,25 @@ def generate_daily_report(db: Session, target_date: date | None = None) -> Daily
             "topic": c.topic,
             "created_at": c.created_at.isoformat() if c.created_at else target_date.isoformat(),
         }
-        for c in reversed(all_chats)
+        for c, _ in reversed(all_chats)
         if c.outcome == "escalada_rrhh"
     ][:10]
 
-    # 5. Indicadores mensuales y de plantilla
+    # 5. Indicadores mensuales y de plantilla (incluyendo incapacidades que inician antes del mes)
     month_start = target_date.replace(day=1)
+    month_disabilities = (
+        db.query(LeaveRequest)
+        .filter(
+            LeaveRequest.status == "aprobada",
+            LeaveRequest.request_type == "incapacidad",
+            LeaveRequest.start_date <= target_date,
+            LeaveRequest.end_date >= month_start,
+        )
+        .all()
+    )
     monthly_disability_days = sum(
-        int(lr.days_count)
-        for lr in approved_30
-        if lr.request_type == "incapacidad" and lr.start_date >= month_start and lr.start_date <= target_date
+        (min(lr.end_date, target_date) - max(lr.start_date, month_start)).days + 1
+        for lr in month_disabilities
     )
 
     monthly_hires = (
@@ -191,17 +209,18 @@ def generate_daily_report(db: Session, target_date: date | None = None) -> Daily
     turnover_rate_pct = round((monthly_exits / max(1, active_headcount)) * 100.0, 2)
 
     employees_over_20_vacation_days = (
-        db.query(Balance)
+        db.query(func.count(func.distinct(Balance.employee_id)))
         .join(Employee, Employee.id == Balance.employee_id)
         .filter(Employee.status == "activo", Balance.available_days > 20)
-        .count()
+        .scalar()
+        or 0
     )
 
     payload_json = {
         "absences_last_30_days": absences_last_30_days,
         "top_5_topics": top_5_topics,
-        "absences_by_type": [{"name": k, "value": v} for k, v in by_type_map.items()],
-        "absences_by_department": [{"department": k, "count": v} for k, v in by_dept_map.items()],
+        "absences_by_type": [{"name": k, "value": len(v)} for k, v in by_type_map.items()],
+        "absences_by_department": [{"department": k, "count": len(v)} for k, v in by_dept_map.items()],
         "pending_requests_list": pending_list,
         "unanswered_questions": unanswered_questions,
         "active_headcount": active_headcount,

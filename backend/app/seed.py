@@ -20,6 +20,7 @@ from app.models import (
 from app.auth import hash_password
 from app.agents.ingestion_agent import sync_drive_policies
 from app.agents.analyst_agent import generate_daily_report
+from app.agents.payment_schedule import get_next_payment_info
 
 
 DEPARTMENTS = [
@@ -47,29 +48,30 @@ LAST_NAMES = [
 ]
 
 
-def _next_quincena(ref: date) -> date:
-    if ref.day <= 15:
-        return ref.replace(day=15)
-    # último día del mes
-    if ref.month == 12:
-        return date(ref.year, 12, 31)
-    return date(ref.year, ref.month + 1, 1) - timedelta(days=1)
-
-
 def seed_database(db: Session) -> None:
     sync_drive_policies(db)
+    tz = ZoneInfo(settings.TIMEZONE)
+    today = datetime.now(tz).date()
+    next_pay_info = get_next_payment_info(db, today)
+    next_pay = next_pay_info["projected_date"]
 
     if db.query(Employee).count() >= 50:
-        tz = ZoneInfo(settings.TIMEZONE)
-        today = datetime.now(tz).date()
+        # Actualización controlada para mantener vigente la fecha de próximo pago semanal (viernes)
+        outdated = (
+            db.query(Employee)
+            .filter(Employee.status == "activo", (Employee.next_payment_date.is_(None)) | (Employee.next_payment_date < today) | (Employee.next_payment_date != next_pay))
+            .all()
+        )
+        if outdated:
+            for emp in outdated:
+                emp.next_payment_date = next_pay
+            db.commit()
+
         if not db.query(DailyReport).filter(DailyReport.report_date == today).first():
             generate_daily_report(db, today)
         return
 
     rng = random.Random(20261117)
-    tz = ZoneInfo(settings.TIMEZONE)
-    today = datetime.now(tz).date()
-    next_pay = _next_quincena(today)
     next_rev = date(today.year, 12, 10) if today.month < 12 else date(today.year + 1, 6, 15)
 
     collab_hash = hash_password("Colaborador123!")

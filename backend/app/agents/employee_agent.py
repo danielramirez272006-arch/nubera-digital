@@ -1,8 +1,12 @@
+from datetime import datetime
 from typing import Dict, Any
+from zoneinfo import ZoneInfo
 from sqlalchemy.orm import Session
 
+from app.config import settings
 from app.models import Employee, Balance, LeaveRequest, Disability
 from app.agents.embeddings import normalize_text
+from app.agents.payment_schedule import get_next_payment_info
 
 
 def answer_employee_question(db: Session, current_user: Employee, question: str) -> Dict[str, Any]:
@@ -12,15 +16,25 @@ def answer_employee_question(db: Session, current_user: Employee, question: str)
     """
     q_norm = normalize_text(question)
 
-    if any(k in q_norm for k in ["pago", "quincena", "fecha de pago", "proximo pago", "cuando pagan"]):
-        pay_str = current_user.next_payment_date.strftime("%d/%m/%Y") if current_user.next_payment_date else "15 o último día hábil del mes"
+    if any(k in q_norm for k in ["pago", "nomina", "fecha de pago", "proximo pago", "cuando pagan", "viernes", "semanal"]):
+        today = datetime.now(ZoneInfo(settings.TIMEZONE)).date()
+        pay_info = get_next_payment_info(db, today)
+        sched_str = pay_info["scheduled_date"].strftime("%d/%m/%Y")
+        proj_str = pay_info["projected_date"].strftime("%d/%m/%Y")
+        eff_str = pay_info["effective_date"].strftime("%d/%m/%Y") if pay_info["effective_date"] else "pendiente de validación por Nómina"
+        adv_note = (
+            f" Por cierre bancario o feriado, se proyecta adelanto al día hábil anterior (**{proj_str}**)."
+            if pay_info["is_advanced"]
+            else ""
+        )
         return {
             "answer": (
-                f"Hola {current_user.full_name}, tu próxima fecha de pago de nómina registrada es el **{pay_str}** "
-                f"mediante transferencia SPEI."
+                f"Hola {current_user.full_name}, conforme al esquema de pagos semanales los viernes (RH-05 / RH-12), "
+                f"tu próxima fecha programada de pago es el **{sched_str}** (estado: {pay_info['status']}; "
+                f"fecha efectiva confirmada: {eff_str}).{adv_note}"
             ),
             "data_type": "pago",
-            "tool_figures": [pay_str],
+            "tool_figures": [sched_str],
         }
 
     if any(k in q_norm for k in ["evaluacion", "desempeno", "revision"]):

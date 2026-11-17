@@ -118,11 +118,11 @@ DEMO_DRIVE_POLICIES = [
         "drive_url": "https://drive.google.com/spreadsheets/d/1NuberaRH04NominaSheet/edit",
         "sections": [
             {
-                "section": "Sección 1. Calendario de pagos y recibos CFDI",
+                "section": "Sección 1. Calendario de pagos semanal y recibos CFDI",
                 "content": (
-                    "El pago de nómina en Nubera Digital se realiza de forma quincenal los días 15 y el último día "
-                    "hábil de cada mes mediante transferencia SPEI. Si el día 15 cae en fin de semana o día inhábil, "
-                    "el depósito se adelanta al día hábil inmediato anterior. Los recibos CFDI se timbran el mismo día de pago."
+                    "El pago de nómina en Nubera Digital se realiza de forma semanal todos los días viernes "
+                    "mediante transferencia SPEI (52 pagos semanales al año). Si el viernes coincide con un día inhábil "
+                    "o cierre bancario, Nómina valida el adelanto al día hábil anterior y registra la fecha efectiva."
                 ),
             },
             {

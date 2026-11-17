@@ -22,7 +22,7 @@ const QUICK_QUESTIONS = [
   { label: 'Saldo y uso próximo año', q: '¿Cuántos días me quedan y puedo usarlos el próximo año?' },
   { label: 'Permisos con goce', q: '¿Cuántos días de permiso dan por paternidad o matrimonio?' },
   { label: 'Incapacidades IMSS', q: '¿Cómo se pagan los primeros días de incapacidad por enfermedad?' },
-  { label: 'Pagos y aguinaldo', q: '¿Qué días pagan la quincena y cuántos días dan de aguinaldo?' },
+  { label: 'Pagos y aguinaldo', q: '¿Qué días se paga la nómina semanal y cuándo se programa el aguinaldo?' },
 ];
 
 export default function ConsultasPage() {
@@ -37,6 +37,7 @@ export default function ConsultasPage() {
   const [ticketDraft, setTicketDraft] = useState<{ topic: string; summary: string } | null>(null);
   const [createdTicket, setCreatedTicket] = useState<TicketOut | null>(null);
   const [viewingDocId, setViewingDocId] = useState<string | null>(null);
+  const [expandedSnippets, setExpandedSnippets] = useState<Record<string, boolean>>({});
   const endRef = useRef<HTMLDivElement | null>(null);
 
   async function loadHistory(sessionId: string) {
@@ -236,50 +237,84 @@ export default function ConsultasPage() {
                     </div>
                   )}
 
-                  {msg.citations && msg.citations.length > 0 && (
-                    <div className="citations-box" aria-label="Fuentes documentales">
-                      <div style={{ fontSize: '0.78rem', fontWeight: 600, color: 'var(--text-secondary)' }}>
-                        Respaldo documental en Google Drive:
-                      </div>
-                      {msg.citations.map((cit, idx) => (
-                        <div key={`${msg.id}-cit-${idx}`} className="citation-item" style={{ flexDirection: 'column', alignItems: 'stretch' }}>
-                          <div style={{ display: 'flex', justifyContent: 'space-between', flexWrap: 'wrap', gap: '0.4rem' }}>
-                            <div>
-                              <FileText size={13} style={{ verticalAlign: 'middle', marginRight: 5 }} aria-hidden="true" />
-                              <strong>{cit.title}</strong> · {cit.section}
-                            </div>
-                            <div style={{ display: 'flex', gap: '0.6rem', alignItems: 'center' }}>
-                              <button
-                                type="button"
-                                className="chip-btn"
-                                style={{ padding: '0.2rem 0.55rem', fontSize: '0.76rem', fontWeight: 600 }}
-                                onClick={() => setViewingDocId(cit.drive_file_id)}
-                              >
-                                Ver documento
-                              </button>
-                              <a
-                                href={cit.drive_url}
-                                target="_blank"
-                                rel="noopener noreferrer"
-                                style={{ fontWeight: 600, display: 'inline-flex', alignItems: 'center', gap: 4 }}
-                              >
-                                <span>Abrir en Drive</span>
-                                <ExternalLink size={12} aria-hidden="true" />
-                              </a>
-                            </div>
-                          </div>
-                          <div style={{ fontSize: '0.76rem', color: 'var(--text-secondary)' }}>
-                            Versión: {cit.version} · Vigencia: {cit.effective_date} · Responsable: {cit.owner}
-                          </div>
-                          {cit.snippet && (
-                            <blockquote style={{ margin: '0.25rem 0 0', paddingLeft: '0.6rem', borderLeft: '2px solid var(--accent)', fontSize: '0.78rem', color: 'var(--text-primary)' }}>
-                              “{cit.snippet}”
-                            </blockquote>
-                          )}
+                  {msg.citations && msg.citations.length > 0 && (() => {
+                    const grouped = msg.citations.reduce<Record<string, typeof msg.citations>>((acc, cit) => {
+                      const key = cit.drive_file_id || cit.title;
+                      if (!acc[key]) acc[key] = [];
+                      acc[key].push(cit);
+                      return acc;
+                    }, {});
+                    return (
+                      <div className="citations-box" aria-label="Fuentes documentales">
+                        <div style={{ fontSize: '0.78rem', fontWeight: 600, color: 'var(--text-secondary)' }}>
+                          Respaldo documental en Google Drive:
                         </div>
-                      ))}
-                    </div>
-                  )}
+                        {Object.entries(grouped).map(([docKey, group]) => {
+                          const primary = group[0];
+                          const snipKey = `${msg.id}-${docKey}`;
+                          const isExpanded = !!expandedSnippets[snipKey];
+                          const sectionsLabel = group.map((g) => g.section).join(' · ');
+                          return (
+                            <div key={snipKey} className="citation-item" style={{ flexDirection: 'column', alignItems: 'stretch' }}>
+                              <div style={{ display: 'flex', justifyContent: 'space-between', flexWrap: 'wrap', gap: '0.4rem' }}>
+                                <div>
+                                  <FileText size={13} style={{ verticalAlign: 'middle', marginRight: 5 }} aria-hidden="true" />
+                                  <strong>{primary.title}</strong> · <span style={{ color: 'var(--text-secondary)' }}>{sectionsLabel}</span>
+                                </div>
+                                <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', flexWrap: 'wrap' }}>
+                                  {primary.snippet && (
+                                    <button
+                                      type="button"
+                                      className="chip-btn"
+                                      aria-expanded={isExpanded}
+                                      style={{ padding: '0.2rem 0.55rem', fontSize: '0.76rem', fontWeight: 600 }}
+                                      onClick={() =>
+                                        setExpandedSnippets((prev) => ({ ...prev, [snipKey]: !prev[snipKey] }))
+                                      }
+                                    >
+                                      {isExpanded ? 'Ocultar fragmento' : 'Ver fragmento'}
+                                    </button>
+                                  )}
+                                  <button
+                                    type="button"
+                                    className="chip-btn"
+                                    style={{ padding: '0.2rem 0.55rem', fontSize: '0.76rem', fontWeight: 600 }}
+                                    onClick={() => setViewingDocId(primary.drive_file_id)}
+                                  >
+                                    Ver documento
+                                  </button>
+                                  <a
+                                    href={primary.drive_url}
+                                    target="_blank"
+                                    rel="noopener noreferrer"
+                                    style={{ fontWeight: 600, display: 'inline-flex', alignItems: 'center', gap: 4 }}
+                                  >
+                                    <span>Abrir en Drive</span>
+                                    <ExternalLink size={12} aria-hidden="true" />
+                                  </a>
+                                </div>
+                              </div>
+                              <div style={{ fontSize: '0.76rem', color: 'var(--text-secondary)' }}>
+                                Versión: {primary.version} · Vigencia: {primary.effective_date} · Responsable: {primary.owner}
+                              </div>
+                              {isExpanded && (
+                                <div style={{ display: 'flex', flexDirection: 'column', gap: '0.35rem', marginTop: '0.25rem' }}>
+                                  {group.map((g, gIdx) => (
+                                    <blockquote
+                                      key={`${snipKey}-g-${gIdx}`}
+                                      style={{ margin: 0, paddingLeft: '0.6rem', borderLeft: '2px solid var(--accent)', fontSize: '0.78rem', color: 'var(--text-primary)' }}
+                                    >
+                                      <strong>{g.section}:</strong> “{g.snippet}”
+                                    </blockquote>
+                                  ))}
+                                </div>
+                              )}
+                            </div>
+                          );
+                        })}
+                      </div>
+                    );
+                  })()}
 
                   <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginTop: '0.6rem', fontSize: '0.78rem', color: 'var(--text-secondary)' }}>
                     <span>¿Esta respuesta fue útil?</span>

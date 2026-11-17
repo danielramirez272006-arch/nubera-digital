@@ -90,7 +90,7 @@ export default function MisDatosPage() {
             type="button"
             className="chip-btn"
             style={{ marginTop: 14 }}
-            onClick={() => askInChat('¿Cuándo es mi próximo pago y qué días pagan la quincena?')}
+            onClick={() => askInChat('¿Cuándo es mi próximo pago semanal?')}
           >
             <MessageSquare size={12} style={{ verticalAlign: 'middle', marginRight: 4 }} /> Consultar pago
           </button>

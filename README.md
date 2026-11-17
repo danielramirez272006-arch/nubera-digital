@@ -88,5 +88,5 @@ cd backend
 backend\.venv\Scripts\python.exe evaluation\run_eval_45.py
 ```
 
-Resultado medido en [EVALUATION_RESULTS.md](evaluation/EVALUATION_RESULTS.md): **45/45 aciertos (100.0%)**, **100.0% < 8 s**, **0 fugas de datos**.
+Resultado medido en [EVALUATION_RESULTS.md](evaluation/EVALUATION_RESULTS.md): **43/45 aciertos (95.6%)**, **latencia p90 = 19 ms**, **100.0% < 8 s**, **0 fugas de datos**.
 # nubera-digital

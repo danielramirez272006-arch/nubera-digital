@@ -56,6 +56,7 @@ from app.agents.orchestrator import process_chat_query
 from app.agents.analyst_agent import generate_daily_report
 from app.agents.ingestion_agent import sync_drive_policies
 from app.agents.escalation_agent import create_ticket
+from app.agents.payment_schedule import get_next_payment_info
 from app.seed import seed_database
 
 scheduler = BackgroundScheduler(timezone=ZoneInfo(settings.TIMEZONE))
@@ -228,6 +229,9 @@ def get_me(current_user: Employee = Depends(get_current_user)):
 
 @app.get("/api/me/data", response_model=MyDataResponse)
 def get_my_data(current_user: Employee = Depends(get_current_user), db: Session = Depends(get_db)):
+    pay_info = get_next_payment_info(db)
+    user_out = _to_user_session(current_user)
+    user_out.next_payment_date = pay_info["projected_date"]
     balances = (
         db.query(Balance)
         .filter(Balance.employee_id == current_user.id)
@@ -249,7 +253,7 @@ def get_my_data(current_user: Employee = Depends(get_current_user), db: Session 
         .all()
     )
     return MyDataResponse(
-        employee=_to_user_session(current_user),
+        employee=user_out,
         balances=[
             BalanceOut(
                 year=b.year,

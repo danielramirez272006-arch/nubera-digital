@@ -8,10 +8,11 @@ from langgraph.graph import StateGraph, END
 
 from app.models import Employee, ChatLog, ChatConversation, DailyReport
 from app.agents.embeddings import normalize_text
-from app.agents.policy_agent import answer_policy_question
+from app.agents.policy_agent import answer_policy_question, retrieve_policy_chunks
 from app.agents.employee_agent import answer_employee_question
 from app.agents.validator_agent import validate_response
 from app.agents.escalation_agent import build_ticket_summary
+from app.agents.llm_client import generate_chat_completion
 
 PROMPT_REGISTRY_PATH = Path(__file__).resolve().parents[3] / "prompts" / "registry.json"
 
@@ -192,14 +193,60 @@ def _build_graph(db: Session, current_user: Employee):
     def mixed_node(state: AgentState) -> AgentState:
         state["agent_used"] = "Orquestador (Datos del Colaborador + Políticas)"
         emp_res = answer_employee_question(db, current_user, state["question"])
-        pol_res = answer_policy_question(db, state["question"])
-        state["citations"] = pol_res["citations"]
+        matches = retrieve_policy_chunks(db, state["question"], top_k=3)
         state["tool_figures"] = emp_res.get("tool_figures", [])
-        if pol_res["found"]:
-            state["answer"] = f"{emp_res['answer']}\n\n**Regla aplicable en política:**\n{pol_res['answer']}"
+
+        if matches and matches[0][1] >= 0.28:
+            citations = []
+            snippets = []
+            seen = set()
+            for chunk, score in matches[:2]:
+                key = (chunk.policy_code, chunk.section)
+                if key not in seen:
+                    seen.add(key)
+                    snippets.append(f"[{chunk.policy_code} · {chunk.section}] {chunk.content}")
+                    citations.append(
+                        {
+                            "drive_file_id": chunk.drive_file_id,
+                            "policy_code": chunk.policy_code,
+                            "title": chunk.title,
+                            "section": chunk.section,
+                            "version": chunk.version,
+                            "effective_date": chunk.effective_date,
+                            "owner": chunk.owner,
+                            "drive_url": chunk.drive_url,
+                            "snippet": chunk.content,
+                            "score": round(float(score), 3),
+                        }
+                    )
+            state["citations"] = citations
+            context_txt = "\n".join(snippets)
+            integrated = generate_chat_completion(
+                system_prompt=(
+                    "Eres el Orquestador de RRHH de Nubera Digital. Integra en una sola respuesta clara y coherente "
+                    "los datos personales autorizados del colaborador y las reglas de las políticas oficiales. "
+                    "Conserva exactamente todas las cifras personales proporcionadas y no te contradigas."
+                ),
+                user_prompt=(
+                    f"Pregunta: {state['question']}\n\n"
+                    f"Datos personales autorizados:\n{emp_res['answer']}\n\n"
+                    f"Fragmentos de políticas:\n{context_txt}"
+                ),
+                max_tokens=450,
+            )
+            if integrated and all(fig in integrated for fig in state["tool_figures"]):
+                state["answer"] = integrated
+            else:
+                state["answer"] = f"{emp_res['answer']}\n\n**Regla aplicable en política:**\n{matches[0][0].content}"
             state["outcome"] = "resuelta"
+            state["needs_hr_escalation"] = False
         else:
-            state["answer"] = f"{emp_res['answer']}\n\n{pol_res['answer']}"
+            state["citations"] = []
+            state["answer"] = (
+                f"{emp_res['answer']}\n\n"
+                "Respecto a la regla general consultada, no se encontró un fragmento suficiente en el repositorio "
+                "para confirmarla; puedes crear un ticket con RRHH para aclaración."
+            )
             state["outcome"] = "escalada_rrhh"
             state["needs_hr_escalation"] = True
         return state
@@ -216,20 +263,29 @@ def _build_graph(db: Session, current_user: Employee):
         )
         state["validation_passed"] = check["valid"]
         if not check["valid"] and state["validation_attempts"] >= 2:
-            # Tras 2 intentos, devuelve solo información verificable y ofrece escalar
             state["needs_hr_escalation"] = True
             if state["outcome"] == "resuelta":
                 state["outcome"] = "escalada_rrhh"
-            state["answer"] += (
-                "\n\nNota del validador: No fue posible verificar todos los detalles automáticamente; "
-                "puedes confirmar la creación de un ticket con RRHH para revisión."
-            )
+            # Conservar únicamente información verificable de herramientas personales si aplica
+            if state["intent"] == "mixta":
+                emp_only = answer_employee_question(db, current_user, state["question"])
+                state["answer"] = (
+                    f"{emp_only['answer']}\n\n"
+                    "No fue posible validar automáticamente la parte normativa; puedes confirmar la creación de un ticket con RRHH."
+                )
+            else:
+                state["answer"] += (
+                    "\n\nNota del validador: No fue posible verificar todos los detalles automáticamente; "
+                    "puedes confirmar la creación de un ticket con RRHH para revisión."
+                )
         return state
 
     def route_after_validation(state: AgentState) -> str:
         if state["validation_passed"] or state["validation_attempts"] >= 2:
             return "done"
-        if state["intent"] in ("politica", "mixta"):
+        if state["intent"] == "mixta":
+            return "retry_mixed"
+        if state["intent"] == "politica":
             return "retry_policy"
         return "done"
 
@@ -263,6 +319,7 @@ def _build_graph(db: Session, current_user: Employee):
         {
             "done": END,
             "retry_policy": "politica",
+            "retry_mixed": "mixta",
         },
     )
     return graph.compile()
