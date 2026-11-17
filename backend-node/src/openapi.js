@@ -72,5 +72,17 @@ export const openApiSpec = {
     '/api/ingestion/sync': {
       post: { summary: 'Sincronizar políticas, PDFs y hojas de cálculo desde Google Drive (solo RRHH)', responses: { 200: { description: 'Estadísticas de sincronización' } } },
     },
+    '/api/chat/conversations': {
+      get: { summary: 'Listar conversaciones del usuario autenticado', responses: { 200: { description: 'Conversaciones' } } },
+    },
+    '/api/chat': {
+      post: { summary: 'Ejecutar consulta multiagente con LangGraph.js y citas verificables', responses: { 200: { description: 'Respuesta validada y trazada' } } },
+    },
+    '/api/chat/history': {
+      get: { summary: 'Historial de mensajes del usuario autenticado', responses: { 200: { description: 'Mensajes previos' } } },
+    },
+    '/api/chat/{id}/feedback': {
+      post: { summary: 'Registrar retroalimentación útil/no útil sobre respuesta', responses: { 200: { description: 'Estado actualizado' } } },
+    },
   },
 };
