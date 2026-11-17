@@ -5,6 +5,10 @@ import { config } from './config.js';
 import { prisma } from './db/prisma.js';
 import { asyncHandler, errorHandler } from './middleware/errorHandler.js';
 import { openApiSpec } from './openapi.js';
+import { authRouter } from './routes/auth.js';
+import { meRouter } from './routes/me.js';
+import { requestsRouter } from './routes/requests.js';
+import { ticketsRouter } from './routes/tickets.js';
 
 export function createApp() {
   const app = express();
@@ -47,6 +51,11 @@ export function createApp() {
       });
     })
   );
+
+  app.use('/api/auth', authRouter);
+  app.use('/api/me', meRouter);
+  app.use('/api/requests', requestsRouter);
+  app.use('/api/tickets', ticketsRouter);
 
   app.use((_req, res) => {
     res.status(404).json({ detail: 'Ruta no encontrada.' });
