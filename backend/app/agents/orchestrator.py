@@ -33,7 +33,8 @@ THIRD_PARTY_PATTERNS = [
 ]
 
 PERSONAL_PRONOUNS = [
-    "me quedan", "tengo", "mi saldo", "mis vacaciones", "mis dias",
+    "me quedan", "cuantos dias tengo", "que saldo tengo", "vacaciones tengo",
+    "mi saldo", "mis vacaciones", "mis dias",
     "mis solicitudes", "mi solicitud", "mi puesto", "mi departamento",
     "mi ingreso", "mi antiguedad", "mi salario", "mi sueldo", "mi lider",
     "me corresponde", "me faltan", "cuantos dias me", "cuando entre",
@@ -93,7 +94,9 @@ def classify_intent(question: str) -> str:
         return "reporte"
 
     has_personal = any(p in q_norm for p in PERSONAL_PRONOUNS)
-    has_policy = any(p in q_norm for p in POLICY_SIGNALS)
+    # Evitar que "mi proximo pago" dispare "pago" de POLICY_SIGNALS como mixta si no pregunta regla general
+    q_for_policy = q_norm.replace("mi proximo pago", "").replace("proxima fecha de pago", "")
+    has_policy = any(p in q_for_policy for p in POLICY_SIGNALS)
 
     if has_personal and has_policy:
         return "mixta"

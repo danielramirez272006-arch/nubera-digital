@@ -92,6 +92,21 @@ def test_functional_requirements():
         rep_old = client.get(f"/api/dashboard/report?report_date={dates_list[2]}", headers=hr_headers)
         assert rep_old.status_code == 200
 
+        # 8. Creación de solicitud con validación RH-01 (10 días hábiles)
+        too_soon = client.post(
+            "/api/requests",
+            json={"request_type": "vacaciones", "start_date": (date.today() + timedelta(days=2)).isoformat(), "end_date": (date.today() + timedelta(days=3)).isoformat()},
+            headers=collab_headers,
+        )
+        assert too_soon.status_code == 400
+        valid_req = client.post(
+            "/api/requests",
+            json={"request_type": "vacaciones", "start_date": (date.today() + timedelta(days=20)).isoformat(), "end_date": (date.today() + timedelta(days=21)).isoformat(), "reason": "Descanso"},
+            headers=collab_headers,
+        )
+        assert valid_req.status_code == 200
+        assert valid_req.json()["status"] == "pendiente"
+
 
 def test_metadata_extraction_and_idempotent_sync():
     rh01_text = (

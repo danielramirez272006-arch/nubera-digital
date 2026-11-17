@@ -38,6 +38,7 @@ from app.schemas import (
     MyDataResponse,
     BalanceOut,
     LeaveRequestOut,
+    LeaveRequestCreate,
     LeaveRequestDecision,
     DisabilityOut,
     TicketCreateRequest,
@@ -467,7 +468,76 @@ def update_ticket(
     return _to_ticket_out(ticket)
 
 
-# --- Solicitudes RRHH ---
+# --- Solicitudes (Colaborador y RRHH) ---
+
+def _count_business_days(start_d: date, end_d: date) -> int:
+    from datetime import timedelta
+    days = 0
+    cur = start_d
+    while cur <= end_d:
+        if cur.weekday() < 5:
+            days += 1
+        cur += timedelta(days=1)
+    return days
+
+
+@app.post("/api/requests", response_model=LeaveRequestOut)
+def create_leave_request(
+    payload: LeaveRequestCreate,
+    current_user: Employee = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    from datetime import timedelta
+    if payload.end_date < payload.start_date:
+        raise HTTPException(status_code=400, detail="La fecha de fin debe ser posterior o igual a la fecha de inicio.")
+
+    today = datetime.now(ZoneInfo(settings.TIMEZONE)).date()
+    days_count = _count_business_days(payload.start_date, payload.end_date)
+    if days_count <= 0:
+        raise HTTPException(status_code=400, detail="El periodo seleccionado debe incluir al menos un día hábil.")
+
+    if payload.request_type == "vacaciones":
+        lead_business_days = _count_business_days(today + timedelta(days=1), payload.start_date)
+        if lead_business_days < 10:
+            raise HTTPException(
+                status_code=400,
+                detail="Conforme a RH-01, las vacaciones deben solicitarse con al menos 10 días hábiles de anticipación.",
+            )
+        bal = db.query(Balance).filter(Balance.employee_id == current_user.id).order_by(Balance.year.desc()).first()
+        if not bal or float(bal.available_days) < days_count:
+            raise HTTPException(
+                status_code=400,
+                detail="No cuentas con suficientes días disponibles en tu saldo vacacional.",
+            )
+        bal.pending_days = float(bal.pending_days) + days_count
+        bal.available_days = float(bal.available_days) - days_count
+
+    lr = LeaveRequest(
+        employee_id=current_user.id,
+        request_type=payload.request_type,
+        start_date=payload.start_date,
+        end_date=payload.end_date,
+        days_count=days_count,
+        status="pendiente",
+        reason=payload.reason,
+    )
+    db.add(lr)
+    db.commit()
+    db.refresh(lr)
+    return LeaveRequestOut(
+        id=lr.id,
+        employee_name=current_user.full_name,
+        department=current_user.department,
+        request_type=lr.request_type,
+        start_date=lr.start_date,
+        end_date=lr.end_date,
+        days_count=float(lr.days_count),
+        status=lr.status,
+        reason=lr.reason,
+        approver_notes=lr.approver_notes,
+        created_at=lr.created_at,
+    )
+
 
 @app.get("/api/requests", response_model=List[LeaveRequestOut])
 def list_all_requests(

@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { Check, X } from 'lucide-react';
+import { Check, X, Download } from 'lucide-react';
 import { apiRequest } from '../api';
 import { LeaveRequestOut } from '../types';
 
@@ -31,6 +31,28 @@ export default function SolicitudesPage() {
     loadRequests(statusFilter);
   }
 
+  function exportCsv() {
+    const header = ['id', 'colaborador', 'departamento', 'tipo', 'inicio', 'fin', 'dias', 'estado'];
+    const rows = requests.map((r) => [
+      r.id,
+      `"${(r.employee_name || '').replace(/"/g, '""')}"`,
+      `"${(r.department || '').replace(/"/g, '""')}"`,
+      r.request_type,
+      r.start_date,
+      r.end_date,
+      r.days_count,
+      r.status,
+    ]);
+    const csv = [header.join(','), ...rows.map((row) => row.join(','))].join('\n');
+    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `solicitudes-rrhh-${statusFilter || 'todas'}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+  }
+
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '0.75rem' }}>
@@ -40,18 +62,23 @@ export default function SolicitudesPage() {
             Revisión y aprobación de vacaciones, permisos e incapacidades.
           </p>
         </div>
-        <select
-          aria-label="Filtrar por estado"
-          className="input"
-          style={{ width: 'auto' }}
-          value={statusFilter}
-          onChange={(e) => setStatusFilter(e.target.value)}
-        >
-          <option value="pendiente">Pendientes</option>
-          <option value="aprobada">Aprobadas</option>
-          <option value="rechazada">Rechazadas</option>
-          <option value="">Todas</option>
-        </select>
+        <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', flexWrap: 'wrap' }}>
+          <select
+            aria-label="Filtrar por estado"
+            className="input"
+            style={{ width: 'auto' }}
+            value={statusFilter}
+            onChange={(e) => setStatusFilter(e.target.value)}
+          >
+            <option value="pendiente">Pendientes</option>
+            <option value="aprobada">Aprobadas</option>
+            <option value="rechazada">Rechazadas</option>
+            <option value="">Todas</option>
+          </select>
+          <button type="button" className="btn btn-secondary" onClick={exportCsv} disabled={requests.length === 0}>
+            <Download size={15} aria-hidden="true" /> Exportar CSV
+          </button>
+        </div>
       </div>
 
       <section className="card">

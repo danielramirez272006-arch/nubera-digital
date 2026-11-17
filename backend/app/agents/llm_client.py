@@ -53,4 +53,19 @@ def generate_chat_completion(system_prompt: str, user_prompt: str, max_tokens: i
         except Exception:
             return None
 
+    if provider == "gemini" and settings.GEMINI_API_KEY:
+        model = settings.LLM_MODEL or "gemini-2.5-flash"
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={settings.GEMINI_API_KEY}"
+        payload = {
+            "systemInstruction": {"parts": [{"text": system_prompt}]},
+            "contents": [{"role": "user", "parts": [{"text": user_prompt}]}],
+            "generationConfig": {"temperature": 0.1, "maxOutputTokens": max_tokens},
+        }
+        try:
+            resp = httpx.post(url, json=payload, timeout=12.0)
+            if resp.status_code == 200:
+                return resp.json()["candidates"][0]["content"]["parts"][0]["text"].strip()
+        except Exception:
+            return None
+
     return None

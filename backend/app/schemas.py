@@ -98,6 +98,13 @@ class LeaveRequestOut(BaseModel):
     created_at: datetime
 
 
+class LeaveRequestCreate(BaseModel):
+    request_type: str = Field(..., pattern="^(vacaciones|permiso_con_goce|permiso_sin_goce|home_office)$")
+    start_date: date
+    end_date: date
+    reason: Optional[str] = Field(default=None, max_length=500)
+
+
 class LeaveRequestDecision(BaseModel):
     status: str = Field(..., pattern="^(aprobada|rechazada)$")
     approver_notes: Optional[str] = None

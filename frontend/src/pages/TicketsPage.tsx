@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { Lock } from 'lucide-react';
+import { Lock, Download } from 'lucide-react';
 import { apiRequest } from '../api';
 import { TicketOut } from '../types';
 
@@ -31,13 +31,39 @@ export default function TicketsPage() {
     loadTickets();
   }
 
+  function exportCsv() {
+    const header = ['folio', 'colaborador', 'departamento', 'tema', 'estado', 'responsable', 'sensible'];
+    const rows = tickets.map((t) => [
+      t.folio,
+      `"${t.employee_name.replace(/"/g, '""')}"`,
+      `"${t.department.replace(/"/g, '""')}"`,
+      `"${t.topic.replace(/"/g, '""')}"`,
+      t.status,
+      `"${t.assigned_to.replace(/"/g, '""')}"`,
+      t.is_sensitive ? 'si' : 'no',
+    ]);
+    const csv = [header.join(','), ...rows.map((r) => r.join(','))].join('\n');
+    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'tickets-rrhh.csv';
+    a.click();
+    URL.revokeObjectURL(url);
+  }
+
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
-      <div>
-        <h1 style={{ margin: '0 0 0.25rem', fontSize: '1.5rem' }}>Atención de tickets</h1>
-        <p style={{ margin: 0, color: 'var(--text-secondary)', fontSize: '0.9rem' }}>
-          Casos escalados por colaboradores. Los casos sensibles se muestran únicamente al personal autorizado.
-        </p>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '0.75rem' }}>
+        <div>
+          <h1 style={{ margin: '0 0 0.25rem', fontSize: '1.5rem' }}>Atención de tickets</h1>
+          <p style={{ margin: 0, color: 'var(--text-secondary)', fontSize: '0.9rem' }}>
+            Casos escalados por colaboradores. Los casos sensibles se muestran únicamente al personal autorizado.
+          </p>
+        </div>
+        <button type="button" className="btn btn-secondary" onClick={exportCsv} disabled={tickets.length === 0}>
+          <Download size={15} aria-hidden="true" /> Exportar CSV
+        </button>
       </div>
 
       {loading ? (
