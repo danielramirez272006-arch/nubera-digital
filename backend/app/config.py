@@ -52,5 +52,9 @@ class Settings(BaseSettings):
     def is_postgres(self) -> bool:
         return self.DATABASE_URL.startswith("postgresql")
 
+    @property
+    def is_mysql(self) -> bool:
+        return self.DATABASE_URL.startswith("mysql")
+
 
 settings = Settings()

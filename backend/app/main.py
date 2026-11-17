@@ -183,9 +183,14 @@ def health_check():
 def system_status(db: Session = Depends(get_db)):
     policies_count = db.query(DriveDocument).filter(DriveDocument.status == "activo").count()
     chunks_count = db.query(DocumentChunk).count()
+    db_mode = (
+        "PostgreSQL + pgvector"
+        if settings.is_postgres
+        else ("MySQL + búsqueda vectorial" if settings.is_mysql else "SQLite local (modo demostración)")
+    )
     return SystemStatusResponse(
         environment=settings.APP_ENV,
-        database_mode="PostgreSQL + pgvector" if settings.is_postgres else "SQLite local (modo demostración)",
+        database_mode=db_mode,
         drive_mode="Google Drive API" if settings.GOOGLE_DRIVE_ENABLED else "Catálogo de políticas local (modo demostración)",
         llm_mode=settings.LLM_PROVIDER if settings.LLM_PROVIDER != "none" else "LangGraph + Embeddings locales",
         timezone=settings.TIMEZONE,
