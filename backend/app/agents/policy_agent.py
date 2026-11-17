@@ -49,8 +49,10 @@ def retrieve_policy_chunks(db: Session, question: str, top_k: int = 3) -> List[T
     for chunk in active_chunks:
         score = cosine_similarity(q_vec, chunk.embedding)
         c_norm = normalize_text(f"{chunk.title} {chunk.section} {chunk.content}")
+        ts_norm = normalize_text(f"{chunk.title} {chunk.section}")
         overlap = sum(1 for w in q_words if w in c_norm)
-        boosted = score + min(0.12, overlap * 0.03)
+        ts_overlap = sum(1 for w in q_words if w in ts_norm)
+        boosted = score + min(0.12, overlap * 0.03) + min(0.16, ts_overlap * 0.08)
         scored.append((chunk, boosted))
 
     scored.sort(key=lambda item: item[1], reverse=True)
@@ -58,7 +60,7 @@ def retrieve_policy_chunks(db: Session, question: str, top_k: int = 3) -> List[T
 
 
 def answer_policy_question(db: Session, question: str) -> Dict[str, Any]:
-    matches = retrieve_policy_chunks(db, question, top_k=3)
+    matches = retrieve_policy_chunks(db, question, top_k=4)
     q_tokens = set(tokenize(question))
 
     has_lexical_grounding = False
@@ -80,13 +82,13 @@ def answer_policy_question(db: Session, question: str) -> Dict[str, Any]:
         }
 
     top_chunk, top_score = matches[0]
-    relevant = [item for item in matches if item[1] >= max(MIN_RELEVANCE_SCORE, top_score - 0.14)]
+    relevant = [item for item in matches if item[1] >= max(MIN_RELEVANCE_SCORE, top_score - 0.18)]
 
     summary_parts = []
     citations = []
     seen_sections = set()
 
-    for chunk, score in relevant[:2]:
+    for chunk, score in relevant[:3]:
         key = (chunk.policy_code, chunk.section)
         if key not in seen_sections:
             seen_sections.add(key)

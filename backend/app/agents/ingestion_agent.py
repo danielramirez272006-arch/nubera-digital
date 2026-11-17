@@ -2,6 +2,8 @@ import hashlib
 import io
 import json
 import re
+import zipfile
+import xml.etree.ElementTree as ET
 from datetime import datetime, timezone
 from typing import Dict, List, Any
 from sqlalchemy.orm import Session
@@ -39,23 +41,99 @@ def _sanitize_document_text(text: str) -> tuple[str, bool]:
     return cleaned, detected
 
 
+def _parse_xlsx_all_sheets(xlsx_bytes: bytes) -> List[Dict[str, str]]:
+    """Extrae todas las pestañas de un Google Sheet exportado como .xlsx."""
+    sections: List[Dict[str, str]] = []
+    with zipfile.ZipFile(io.BytesIO(xlsx_bytes)) as zf:
+        shared_strings: List[str] = []
+        if "xl/sharedStrings.xml" in zf.namelist():
+            ss_root = ET.fromstring(zf.read("xl/sharedStrings.xml"))
+            for si in ss_root.iter():
+                if si.tag.endswith("}si") or si.tag == "si":
+                    texts = [t.text or "" for t in si.iter() if t.tag.endswith("}t") or t.tag == "t"]
+                    shared_strings.append("".join(texts))
+
+        wb_root = ET.fromstring(zf.read("xl/workbook.xml"))
+        rels_root = ET.fromstring(zf.read("xl/_rels/workbook.xml.rels"))
+        rid_to_target: Dict[str, str] = {}
+        for rel in rels_root.iter():
+            if rel.tag.endswith("Relationship"):
+                rid = rel.attrib.get("Id", "")
+                target = rel.attrib.get("Target", "").lstrip("/")
+                if not target.startswith("xl/"):
+                    target = f"xl/{target}"
+                rid_to_target[rid] = target
+
+        for sh in wb_root.iter():
+            if sh.tag.endswith("}sheet") or sh.tag == "sheet":
+                sheet_name = sh.attrib.get("name", "Hoja")
+                rid = next((v for k, v in sh.attrib.items() if k.endswith("}id") or k == "r:id"), "")
+                sheet_path = rid_to_target.get(rid)
+                if not sheet_path or sheet_path not in zf.namelist():
+                    continue
+                sh_root = ET.fromstring(zf.read(sheet_path))
+                row_lines: List[str] = []
+                for row in sh_root.iter():
+                    if row.tag.endswith("}row") or row.tag == "row":
+                        cells: List[str] = []
+                        for c in row:
+                            ctype = c.attrib.get("t", "")
+                            val = ""
+                            for child in c:
+                                if child.tag.endswith("}v") or child.tag == "v":
+                                    raw_v = child.text or ""
+                                    if ctype == "s" and raw_v.isdigit():
+                                        idx = int(raw_v)
+                                        val = shared_strings[idx] if idx < len(shared_strings) else raw_v
+                                    else:
+                                        val = raw_v
+                                elif child.tag.endswith("}is") or child.tag == "is":
+                                    val = "".join(t.text or "" for t in child.iter() if t.tag.endswith("}t") or t.tag == "t")
+                            if val.strip():
+                                cells.append(val.strip())
+                        if cells:
+                            row_lines.append(" | ".join(cells))
+                if row_lines:
+                    sections.append({"section": f"Pestaña: {sheet_name}", "content": "\n".join(row_lines)})
+    return sections
+
+
 def _split_into_sections(title: str, raw_text: str) -> List[Dict[str, str]]:
     lines = [ln.strip() for ln in raw_text.splitlines() if ln.strip()]
     sections: List[Dict[str, str]] = []
     current_section = "Sección General"
     buffer: List[str] = []
 
+    heading_re = re.compile(r"^(sección|seccion|artículo|articulo|##|\d+\.\s+[A-ZÁÉÍÓÚÑ])", re.IGNORECASE)
+
+    def _flush_section(sec_name: str, text_buf: List[str]):
+        full = " ".join(text_buf).strip()
+        if not full:
+            return
+        max_len = 900
+        overlap = 120
+        if len(full) <= max_len:
+            sections.append({"section": sec_name, "content": full})
+            return
+        start = 0
+        part = 1
+        while start < len(full):
+            end = min(len(full), start + max_len)
+            sections.append({"section": f"{sec_name} (parte {part})", "content": full[start:end].strip()})
+            if end >= len(full):
+                break
+            start = max(0, end - overlap)
+            part += 1
+
     for line in lines:
-        if line.lower().startswith(("sección", "seccion", "artículo", "articulo", "## ")):
-            if buffer:
-                sections.append({"section": current_section, "content": " ".join(buffer)})
-                buffer = []
+        if heading_re.match(line) and len(line) < 140:
+            _flush_section(current_section, buffer)
+            buffer = []
             current_section = line.lstrip("# ").strip()[:180]
         else:
             buffer.append(line)
 
-    if buffer:
-        sections.append({"section": current_section, "content": " ".join(buffer)})
+    _flush_section(current_section, buffer)
     if not sections:
         sections.append({"section": f"Contenido de {title}", "content": raw_text[:2000]})
     return sections
@@ -104,16 +182,23 @@ def _fetch_real_drive_documents() -> List[Dict[str, Any]]:
         "mimeType = 'application/vnd.google-apps.spreadsheet' or "
         "mimeType = 'application/pdf')"
     )
-    results = (
-        service.files()
-        .list(
-            q=query,
-            fields="files(id, name, mimeType, version, modifiedTime, webViewLink)",
-            pageSize=100,
+    files: List[Dict[str, Any]] = []
+    page_token = None
+    while True:
+        results = (
+            service.files()
+            .list(
+                q=query,
+                fields="nextPageToken, files(id, name, mimeType, version, modifiedTime, webViewLink)",
+                pageSize=100,
+                pageToken=page_token,
+            )
+            .execute()
         )
-        .execute()
-    )
-    files = results.get("files", [])
+        files.extend(results.get("files", []))
+        page_token = results.get("nextPageToken")
+        if not page_token:
+            break
     docs: List[Dict[str, Any]] = []
 
     for f in files:
@@ -124,13 +209,17 @@ def _fetch_real_drive_documents() -> List[Dict[str, Any]]:
         drive_url = f.get("webViewLink") or f"https://drive.google.com/file/d/{file_id}/view"
         policy_code = title.split()[0] if title.upper().startswith("RH-") else "POL"
 
-        raw_text = ""
+        sections: List[Dict[str, str]] = []
         if mime == "application/vnd.google-apps.document":
             exported = service.files().export(fileId=file_id, mimeType="text/plain").execute()
             raw_text = exported.decode("utf-8", errors="ignore")
+            sections = _split_into_sections(title, raw_text)
         elif mime == "application/vnd.google-apps.spreadsheet":
-            exported = service.files().export(fileId=file_id, mimeType="text/csv").execute()
-            raw_text = exported.decode("utf-8", errors="ignore")
+            exported = service.files().export(
+                fileId=file_id,
+                mimeType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            ).execute()
+            sections = _parse_xlsx_all_sheets(exported)
         elif mime == "application/pdf":
             request = service.files().get_media(fileId=file_id)
             buf = io.BytesIO()
@@ -141,6 +230,7 @@ def _fetch_real_drive_documents() -> List[Dict[str, Any]]:
             buf.seek(0)
             reader = PdfReader(buf)
             raw_text = "\n".join(page.extract_text() or "" for page in reader.pages)
+            sections = _split_into_sections(title, raw_text)
 
         docs.append(
             {
@@ -152,7 +242,7 @@ def _fetch_real_drive_documents() -> List[Dict[str, Any]]:
                 "effective_date": (f.get("modifiedTime") or "2026-01-01")[:10],
                 "owner": "Dirección de Talento y Cultura",
                 "drive_url": drive_url,
-                "sections": _split_into_sections(title, raw_text),
+                "sections": sections,
             }
         )
     return docs

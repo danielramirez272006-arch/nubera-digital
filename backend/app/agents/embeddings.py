@@ -26,7 +26,8 @@ SYNONYM_GROUPS = {
     "remoto": ["remoto", "home office", "hibrido", "horario", "entrada", "salida", "oficina", "presencial", "jornada"],
     "evaluacion": ["evaluacion", "desempeno", "okr", "merito", "promocion", "semestral"],
     "capacitacion": ["capacitacion", "certificacion", "certificaciones", "curso", "presupuesto", "aprendizaje"],
-    "etica": ["etica", "acoso", "nom 035", "hostigamiento", "discriminacion", "denuncia", "confidencial"],
+    "etica": ["etica", "acoso", "nom 035", "hostigamiento", "discriminacion", "denuncia", "denuncias", "confidencial", "conducta", "falta", "reporta", "reportar", "canal"],
+    "feriados": ["feriado", "feriados", "festivo", "festivos", "asueto", "calendario", "inhabil", "oficial"],
     "viaticos": ["viaticos", "viaje", "hospedaje", "alimentos", "cfdi", "reembolso"],
     "seguridad": ["seguridad", "computo", "equipo", "mfa", "cifrado", "laptop"],
 }

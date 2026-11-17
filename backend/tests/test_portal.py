@@ -1,3 +1,9 @@
+import os
+
+os.environ["DATABASE_URL"] = "sqlite:///./test_portal.db"
+os.environ["GOOGLE_DRIVE_ENABLED"] = "false"
+os.environ["LLM_PROVIDER"] = "none"
+
 from fastapi.testclient import TestClient
 from app.main import app
 
