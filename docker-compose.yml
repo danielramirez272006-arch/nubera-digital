@@ -18,7 +18,7 @@ services:
       retries: 10
 
   backend:
-    build: ./backend-node
+    build: ./backend
     container_name: nubera_rrhh_backend_node
     env_file:
       - .env.example

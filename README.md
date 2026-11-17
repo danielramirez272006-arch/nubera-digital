@@ -9,10 +9,11 @@ Portal interno de Recursos Humanos para **Nubera Digital** (México), construido
 ```text
 .
 ├── frontend/               # React (.jsx/.js) + Vite + React Router + Recharts
-├── backend-node/           # Express (ESM) + Prisma ORM (MySQL) + Zod + LangGraph.js + node-cron
+├── backend/                # Express (ESM) + Prisma ORM (MySQL) + Zod + LangGraph.js + node-cron
 │   ├── prisma/             # schema.prisma, migraciones versionadas y seed.js
-│   ├── src/                # Rutas, middleware RBAC/auth, agentes y servicios
-│   └── tests/              # Pruebas de integración por etapa (node --test)
+│   ├── src/                # agents/, services/, routes/, middleware/, db/
+│   └── tests/              # Pruebas de integración ordenadas (node --test)
+├── database/               # DDL inicial de referencia y respaldos locales
 ├── prompts/                # Prompts versionados por agente + registry.json
 ├── evaluation/
 │   ├── run_eval_45.mjs     # Evaluación aislada en JS (45 preguntas + RBAC + Drive + concurrencia + SQL)
@@ -29,7 +30,7 @@ Portal interno de Recursos Humanos para **Nubera Digital** (México), construido
 
 ## Integraciones activas
 
-- **Base de datos y ORM:** **MySQL 8** gestionado con **Prisma ORM** ([schema.prisma](file:///c:/Users/calva/taller-cli/minis%20proyecto/backend-node/prisma/schema.prisma)), migraciones versionadas, transacciones atómicas y bloqueo pesimista `FOR UPDATE` para aprobación de solicitudes.
+- **Base de datos y ORM:** **MySQL 8** gestionado con **Prisma ORM** ([schema.prisma](file:///c:/Users/calva/taller-cli/minis%20proyecto/backend/prisma/schema.prisma)), migraciones versionadas, transacciones atómicas y bloqueo pesimista `FOR UPDATE` para aprobación de solicitudes.
 - **Google Drive y Sheets:** Sincronización real con Google Drive API (`googleapis`, `pdf-parse`, `xlsx`) para Google Docs, PDFs (`RH-09`) y Google Sheets con múltiples pestañas (`Pagos 2026`, `Feriados 2026`).
 - **Orquestación multiagente:** Grafo en **LangGraph.js** (`@langchain/langgraph`) con clasificación de intención, agente de políticas con embeddings de 384 dimensiones, agente de datos personales, validador (hasta 2 reintentos), agente analista y tickets de escalamiento.
 - **Programación:** Tareas automáticas con `node-cron` en `America/Mexico_City` (6:30 a. m. ingesta documental, 7:00 a. m. reporte diario).
@@ -49,7 +50,7 @@ Portal interno de Recursos Humanos para **Nubera Digital** (México), construido
 ### 1. Backend (Node.js + Express + Prisma)
 
 ```bash
-cd backend-node
+cd backend
 npm install
 npx prisma generate
 npx prisma migrate deploy
@@ -81,7 +82,7 @@ docker compose up --build
 
 ```bash
 # Pruebas de integración del backend Node
-cd backend-node
+cd backend
 npm test
 
 # Evaluación integral aislada (45 preguntas + ciclo Drive + SQL + RBAC)

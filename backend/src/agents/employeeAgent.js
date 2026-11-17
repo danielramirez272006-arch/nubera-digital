@@ -1,6 +1,6 @@
 import { normalizeText } from './embeddings.js';
-import { getNextPaymentInfo, todayInTimezone } from './paymentSchedule.js';
-import { computeVacationEntitlement } from './vacationRules.js';
+import { getNextPaymentInfo, todayInTimezone } from '../services/paymentSchedule.js';
+import { computeVacationEntitlement } from '../services/vacationRules.js';
 
 function formatDmy(dateVal) {
   if (!dateVal) return '';

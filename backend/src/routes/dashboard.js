@@ -4,7 +4,7 @@ import { prisma } from '../db/prisma.js';
 import { AppError, asyncHandler } from '../middleware/errorHandler.js';
 import { validateQuery } from '../middleware/validate.js';
 import { requireAuth, requireHrRole } from '../middleware/auth.js';
-import { generateDailyReport } from '../services/analystAgent.js';
+import { generateDailyReport } from '../agents/analystAgent.js';
 import { parseIsoDateUtc, toIsoDate } from '../services/vacationRules.js';
 
 export const dashboardRouter = Router();

@@ -3,8 +3,8 @@ import { config } from '../config.js';
 import { normalizeText } from './embeddings.js';
 import { generateChatCompletion } from './llmClient.js';
 import { loadPromptText } from './promptLoader.js';
-import { todayInTimezone } from './paymentSchedule.js';
-import { addDaysUtc, parseIsoDateUtc, toIsoDate } from './vacationRules.js';
+import { todayInTimezone } from '../services/paymentSchedule.js';
+import { addDaysUtc, parseIsoDateUtc, toIsoDate } from '../services/vacationRules.js';
 
 export const ABSENCE_TYPES = ['vacaciones', 'permiso_con_goce', 'permiso_sin_goce', 'incapacidad'];
 

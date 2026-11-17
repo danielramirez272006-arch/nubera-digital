@@ -14,7 +14,7 @@ import { fileURLToPath } from 'node:url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT_DIR = path.resolve(__dirname, '..');
-const BACKEND_DIR = path.join(ROOT_DIR, 'backend-node');
+const BACKEND_DIR = path.join(ROOT_DIR, 'backend');
 
 const EVAL_CASES = [
   // --- 25 preguntas base ---
@@ -75,7 +75,7 @@ async function readProdDatabaseUrl() {
       return m[1].trim().replace(/^["']|["']$/g, '');
     }
   }
-  throw new Error('No se encontró DATABASE_URL en backend-node/.env');
+  throw new Error('No se encontró DATABASE_URL en backend/.env');
 }
 
 function buildEvalDbUrl(prodUrl) {
@@ -105,7 +105,7 @@ async function main() {
 
   // Importar PrismaClient conectado inicialmente a prod para leer snapshot y crear DB aislada
   process.env.DATABASE_URL = prodUrl;
-  const { PrismaClient } = await import('../backend-node/node_modules/@prisma/client/index.js');
+  const { PrismaClient } = await import('../backend/node_modules/@prisma/client/index.js');
   const prodPrisma = new PrismaClient({ datasources: { db: { url: prodUrl } } });
 
   let evalPrisma = null;
@@ -152,9 +152,9 @@ async function main() {
     process.env.GOOGLE_DRIVE_ENABLED = 'false';
 
     const [{ createApp }, dbMod, { syncDrivePolicies }] = await Promise.all([
-      import('../backend-node/src/app.js'),
-      import('../backend-node/src/db/prisma.js'),
-      import('../backend-node/src/services/ingestionAgent.js'),
+      import('../backend/src/app.js'),
+      import('../backend/src/db/prisma.js'),
+      import('../backend/src/agents/ingestionAgent.js'),
     ]);
     evalPrisma = dbMod.prisma;
 
@@ -287,7 +287,7 @@ async function main() {
     const mdLines = [
       '# Resultados de Evaluación Aislada en JavaScript (45 Preguntas + RBAC + Concurrencia + Drive + SQL)',
       '',
-      `- **Stack evaluado:** Node.js + Express + Prisma ORM + MySQL + LangGraph.js (\`backend-node/\`)`,
+      `- **Stack evaluado:** Node.js + Express + Prisma ORM + MySQL + LangGraph.js (\`backend/\`)`,
       `- **Base de datos utilizada:** Base temporal aislada \`${evalDb}\` (clonada y eliminada al finalizar)`,
       `- **Aciertos:** ${passed}/45 (**${acc.toFixed(1)}%**) — Meta >= 80%`,
       `- **Consultas < 8 s:** ${under8s}/45 (**${fastPct.toFixed(1)}%**) — Meta >= 90%`,

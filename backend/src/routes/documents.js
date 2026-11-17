@@ -5,7 +5,7 @@ import { config } from '../config.js';
 import { prisma } from '../db/prisma.js';
 import { AppError, asyncHandler } from '../middleware/errorHandler.js';
 import { requireAuth, requireHrRole } from '../middleware/auth.js';
-import { syncDrivePolicies } from '../services/ingestionAgent.js';
+import { syncDrivePolicies } from '../agents/ingestionAgent.js';
 
 export const documentsRouter = Router();
 export const ingestionRouter = Router();
@@ -161,7 +161,7 @@ ingestionRouter.get(
   asyncHandler(async (_req, res) => {
     const { clientId } = await resolveOAuthClientCredentials();
     if (!clientId) {
-      throw new AppError(400, 'Configura GOOGLE_OAUTH_CLIENT_ID o client_secret.json en backend-node/.env');
+      throw new AppError(400, 'Configura GOOGLE_OAUTH_CLIENT_ID o client_secret.json en backend/.env');
     }
     const params = new URLSearchParams({
       client_id: clientId,

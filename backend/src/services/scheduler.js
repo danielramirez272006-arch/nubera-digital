@@ -1,7 +1,7 @@
 import cron from 'node-cron';
 import { config } from '../config.js';
-import { syncDrivePolicies } from './ingestionAgent.js';
-import { generateDailyReport } from './analystAgent.js';
+import { syncDrivePolicies } from '../agents/ingestionAgent.js';
+import { generateDailyReport } from '../agents/analystAgent.js';
 
 const scheduledTasks = [];
 

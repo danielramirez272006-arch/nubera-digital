@@ -3,8 +3,8 @@ import assert from 'node:assert/strict';
 import http from 'node:http';
 import { createApp } from '../src/app.js';
 import { prisma } from '../src/db/prisma.js';
-import { embedText, cosineSimilarity } from '../src/services/embeddings.js';
-import { sanitizeDocumentText, extractDocumentMetadata, splitIntoSections } from '../src/services/ingestionAgent.js';
+import { embedText, cosineSimilarity } from '../src/agents/embeddings.js';
+import { sanitizeDocumentText, extractDocumentMetadata, splitIntoSections } from '../src/agents/ingestionAgent.js';
 
 function startTestServer() {
   const app = createApp();

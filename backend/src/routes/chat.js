@@ -5,7 +5,7 @@ import { AppError, asyncHandler } from '../middleware/errorHandler.js';
 import { validateBody, validateQuery } from '../middleware/validate.js';
 import { requireAuth } from '../middleware/auth.js';
 import { checkRateLimit } from '../middleware/rateLimit.js';
-import { processChatQuery } from '../services/orchestrator.js';
+import { processChatQuery } from '../agents/orchestrator.js';
 
 export const chatRouter = Router();
 
