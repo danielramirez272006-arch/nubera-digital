@@ -1,0 +1,142 @@
+from typing import Dict, Any
+from sqlalchemy.orm import Session
+
+from app.models import Employee, Balance, LeaveRequest, Disability
+from app.agents.embeddings import normalize_text
+
+
+def answer_employee_question(db: Session, current_user: Employee, question: str) -> Dict[str, Any]:
+    """
+    Agente de datos del colaborador: consultas parametrizadas de solo lectura
+    filtradas estrictamente por current_user.id.
+    """
+    q_norm = normalize_text(question)
+
+    if any(k in q_norm for k in ["pago", "quincena", "fecha de pago", "proximo pago", "cuando pagan"]):
+        pay_str = current_user.next_payment_date.strftime("%d/%m/%Y") if current_user.next_payment_date else "15 o último día hábil del mes"
+        return {
+            "answer": (
+                f"Hola {current_user.full_name}, tu próxima fecha de pago de nómina registrada es el **{pay_str}** "
+                f"mediante transferencia SPEI."
+            ),
+            "data_type": "pago",
+            "tool_figures": [pay_str],
+        }
+
+    if any(k in q_norm for k in ["evaluacion", "desempeno", "revision"]):
+        rev_str = current_user.next_review_date.strftime("%d/%m/%Y") if current_user.next_review_date else "Próximo ciclo semestral"
+        return {
+            "answer": (
+                f"Hola {current_user.full_name}, tu próxima evaluación de desempeño está programada para el **{rev_str}**."
+            ),
+            "data_type": "evaluacion",
+            "tool_figures": [rev_str],
+        }
+
+    if any(k in q_norm for k in ["vacacion", "dias", "saldo", "quedan", "disponible", "vencen", "caducan", "proximo ano"]):
+        balance = (
+            db.query(Balance)
+            .filter(Balance.employee_id == current_user.id)
+            .order_by(Balance.year.desc())
+            .first()
+        )
+        if not balance:
+            return {
+                "answer": f"No se encontró un registro de saldo vacacional vigente para tu cuenta ({current_user.full_name}).",
+                "data_type": "vacaciones",
+                "tool_figures": [],
+            }
+        avail_str = f"{float(balance.available_days):g}"
+        exp_str = balance.expiration_date.strftime("%d/%m/%Y")
+        return {
+            "answer": (
+                f"Hola {current_user.full_name}, en tu periodo vigente ({balance.year}) tienes "
+                f"**{avail_str} días disponibles** de vacaciones "
+                f"(de {float(balance.entitled_days):g} días correspondientes, {float(balance.used_days):g} disfrutados "
+                f"y {float(balance.pending_days):g} en solicitud pendiente). "
+                f"Tu saldo actual tiene vigencia hasta el **{exp_str}**."
+            ),
+            "data_type": "vacaciones",
+            "tool_figures": [avail_str, exp_str],
+        }
+
+    if any(k in q_norm for k in ["incapacidad", "incapacidades"]):
+        dis = (
+            db.query(Disability)
+            .filter(Disability.employee_id == current_user.id)
+            .order_by(Disability.start_date.desc())
+            .limit(3)
+            .all()
+        )
+        if not dis:
+            return {
+                "answer": f"No tienes incapacidades registradas en tu historial, {current_user.full_name}.",
+                "data_type": "incapacidades",
+                "tool_figures": [],
+            }
+        lines = [
+            f"- {d.disability_type.replace('_', ' ').capitalize()} ({d.start_date.strftime('%d/%m/%Y')} al {d.end_date.strftime('%d/%m/%Y')}, {d.days_count} días): **{d.status.upper()}**"
+            for d in dis
+        ]
+        return {
+            "answer": "Tus incapacidades registradas son:\n" + "\n".join(lines),
+            "data_type": "incapacidades",
+            "tool_figures": [str(d.days_count) for d in dis],
+        }
+
+    if any(k in q_norm for k in ["solicitud", "solicitudes", "estatus", "estado", "aprobada", "pendiente", "permiso"]):
+        reqs = (
+            db.query(LeaveRequest)
+            .filter(LeaveRequest.employee_id == current_user.id)
+            .order_by(LeaveRequest.created_at.desc())
+            .limit(5)
+            .all()
+        )
+        if not reqs:
+            return {
+                "answer": f"No tienes solicitudes recientes registradas en tu historial, {current_user.full_name}.",
+                "data_type": "solicitudes",
+                "tool_figures": [],
+            }
+        lines = [
+            f"- {r.request_type.replace('_', ' ').capitalize()} del {r.start_date.strftime('%d/%m/%Y')} "
+            f"al {r.end_date.strftime('%d/%m/%Y')} ({float(r.days_count):g} días): **{r.status.upper()}**"
+            for r in reqs
+        ]
+        return {
+            "answer": "Estas son tus solicitudes más recientes:\n" + "\n".join(lines),
+            "data_type": "solicitudes",
+            "tool_figures": [],
+        }
+
+    if any(k in q_norm for k in ["puesto", "departamento", "antiguedad", "ingreso", "salario", "sueldo", "jefe", "lider", "perfil"]):
+        return {
+            "answer": (
+                f"Tu ficha laboral registra el puesto de **{current_user.position}** en el departamento de "
+                f"**{current_user.department}**, con fecha de ingreso el **{current_user.hire_date.strftime('%d/%m/%Y')}** "
+                f"y líder directo **{current_user.manager_name or 'Dirección de Área'}**."
+            ),
+            "data_type": "perfil",
+            "tool_figures": [],
+        }
+
+    balance = (
+        db.query(Balance)
+        .filter(Balance.employee_id == current_user.id)
+        .order_by(Balance.year.desc())
+        .first()
+    )
+    avail = f"{float(balance.available_days):g}" if balance else "0"
+    pending_count = (
+        db.query(LeaveRequest)
+        .filter(LeaveRequest.employee_id == current_user.id, LeaveRequest.status == "pendiente")
+        .count()
+    )
+    return {
+        "answer": (
+            f"Resumen de tu cuenta ({current_user.full_name}, {current_user.employee_code}): "
+            f"tienes **{avail} días de vacaciones disponibles** y **{pending_count} solicitud(es) pendiente(s)**."
+        ),
+        "data_type": "resumen",
+        "tool_figures": [avail, str(pending_count)],
+    }
