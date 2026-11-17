@@ -18,12 +18,9 @@ DEMO_DRIVE_POLICIES = [
                 "section": "Sección 1. Días de vacaciones por antigüedad y prima vacacional",
                 "content": (
                     "Conforme a la Ley Federal del Trabajo en México y la política RH-01 de Nubera Digital, "
-                    "las personas colaboradoras tienen derecho a un periodo anual de vacaciones pagadas a partir "
-                    "del primer año de servicio: 12 días hábiles en el primer año, aumentando 2 días laborables "
-                    "por cada año subsecuente hasta llegar a 20 días en el quinto año. A partir del sexto año, "
-                    "el periodo aumenta en 2 días por cada cinco años de servicios. Nubera Digital otorga una "
-                    "prima vacacional del 25% sobre los salarios correspondientes al periodo vacacional, pagada "
-                    "en la quincena del aniversario laboral."
+                    "Nubera otorga 15 días laborables al primer y segundo aniversario (o el mínimo legal si es mayor: "
+                    "16 días al tercer año, 18 al cuarto, 20 al quinto y +2 cada cinco años). "
+                    "La prima vacacional interna en Nubera Digital es del 30%."
                 ),
             },
             {
@@ -31,19 +28,15 @@ DEMO_DRIVE_POLICIES = [
                 "content": (
                     "Regla administrativa de solicitud (RH-01): Toda solicitud de vacaciones debe registrarse "
                     "en el Portal de RRHH con al menos 10 días hábiles de anticipación respecto a la fecha de inicio. "
-                    "Para periodos mayores a 5 días hábiles continuos, se recomienda coordinar la entrega de pendientes "
-                    "con 15 días hábiles de antelación. La solicitud requiere aprobación del líder directo y validación "
-                    "del equipo de RRHH antes de iniciar el periodo de descanso."
+                    "La solicitud requiere aprobación del líder directo y validación del equipo de RRHH."
                 ),
             },
             {
                 "section": "Sección 3. Plazo de disfrute, vigencia y uso en el próximo año",
                 "content": (
-                    "Los días de vacaciones generados en cada aniversario laboral pueden disfrutarse durante los "
-                    "18 meses siguientes a la fecha en que se devengaron (incluyendo el primer trimestre del próximo año "
-                    "calendario según la fecha de vencimiento mostrada en tu saldo). Si los días no se disfrutan dentro "
-                    "del plazo de vigencia establecido en el saldo, prescriben conforme al artículo 516 de la LFT y "
-                    "no son acumulables de forma indefinida ni compensables en efectivo, salvo en caso de terminación laboral."
+                    "El periodo se determina por aniversario laboral, puede abarcar dos años calendario (cruzar diciembre) "
+                    "y debe programarse dentro de los 6 meses posteriores al aniversario conforme al artículo 81 de la LFT. "
+                    "Operaciones de RRHH revisa el caso cuando existen días pendientes."
                 ),
             },
         ],

@@ -67,6 +67,13 @@ export interface BalanceOut {
   pending_days: number;
   available_days: number;
   expiration_date: string;
+  years_of_service?: number;
+  period_start?: string | null;
+  period_end?: string | null;
+  anniversary_date?: string | null;
+  next_anniversary_date?: string | null;
+  six_month_deadline?: string | null;
+  origin_note?: string;
 }
 
 export interface LeaveRequestOut {
@@ -146,7 +153,11 @@ export interface DocumentAlertOut {
   alert_type: string;
   severity: string;
   detail: string;
+  status: 'activa' | 'revisada' | 'resuelta' | string;
+  occurrence_count: number;
   resolved: boolean;
+  last_seen_at?: string | null;
+  resolved_at?: string | null;
   created_at: string;
 }
 
@@ -178,6 +189,13 @@ export interface DashboardReport {
     top_5_topics: { topic: string; count: number }[];
     absences_by_type: { name: string; value: number }[];
     absences_by_department: { department: string; count: number }[];
+    today_absent_records?: {
+      employee_id: number;
+      department: string;
+      request_type: string;
+      is_disability: boolean;
+    }[];
+    departments_catalog?: string[];
     pending_requests_list: {
       id: number;
       employee_name: string;
@@ -189,7 +207,13 @@ export interface DashboardReport {
       days_waiting: number;
       is_over_3_days: boolean;
     }[];
-    unanswered_questions: { question: string; topic: string; created_at: string }[];
+    unanswered_questions: {
+      question: string;
+      topic: string;
+      count?: number;
+      last_asked_at?: string;
+      created_at?: string;
+    }[];
     active_headcount: number;
   };
   generated_at: string;

@@ -117,7 +117,11 @@ CREATE TABLE IF NOT EXISTS document_audit_alerts (
     alert_type VARCHAR(40) NOT NULL,
     severity VARCHAR(20) NOT NULL DEFAULT 'media',
     detail TEXT NOT NULL,
+    status VARCHAR(20) NOT NULL DEFAULT 'activa',
+    occurrence_count INT NOT NULL DEFAULT 1,
     resolved BOOLEAN NOT NULL DEFAULT FALSE,
+    last_seen_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    resolved_at DATETIME NULL,
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP
 ) ENGINE=InnoDB;
 

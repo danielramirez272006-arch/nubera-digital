@@ -7,6 +7,9 @@ from sqlalchemy.orm import Session
 from app.config import settings
 from app.models import Employee, Balance, LeaveRequest, Movement, ChatLog, DailyReport
 from app.agents.llm_client import generate_chat_completion
+from app.agents.embeddings import normalize_text
+
+ABSENCE_TYPES = ("vacaciones", "permiso_con_goce", "permiso_sin_goce", "incapacidad")
 
 
 def _build_executive_summary(metrics: Dict[str, Any]) -> str:
@@ -62,12 +65,13 @@ def generate_daily_report(db: Session, target_date: date | None = None) -> Daily
         tz = ZoneInfo(settings.TIMEZONE)
         target_date = datetime.now(tz).date()
 
-    # 1. Ausencias del día (personas únicas para no duplicar solicitudes solapadas)
+    # 1. Ausencias del día (excluye teletrabajo/home_office; personas únicas para no duplicar solapadas)
     today_leaves = (
         db.query(LeaveRequest, Employee)
         .join(Employee, Employee.id == LeaveRequest.employee_id)
         .filter(
             LeaveRequest.status == "aprobada",
+            LeaveRequest.request_type.in_(ABSENCE_TYPES),
             LeaveRequest.start_date <= target_date,
             LeaveRequest.end_date >= target_date,
         )
@@ -78,10 +82,19 @@ def generate_daily_report(db: Session, target_date: date | None = None) -> Daily
 
     by_type_map: Dict[str, set[int]] = {}
     by_dept_map: Dict[str, set[int]] = {}
+    today_absent_records = []
     for lr, emp in today_leaves:
         t_label = lr.request_type.replace("_", " ").capitalize()
         by_type_map.setdefault(t_label, set()).add(lr.employee_id)
         by_dept_map.setdefault(emp.department, set()).add(lr.employee_id)
+        today_absent_records.append(
+            {
+                "employee_id": lr.employee_id,
+                "department": emp.department,
+                "request_type": t_label,
+                "is_disability": lr.request_type == "incapacidad",
+            }
+        )
 
     # 2. Solicitudes pendientes y >3 días
     pending_rows = (
@@ -116,12 +129,13 @@ def generate_daily_report(db: Session, target_date: date | None = None) -> Daily
         )
     pending_requests = len(pending_list)
 
-    # 3. Serie de ausencias últimos 30 días
+    # 3. Serie de ausencias últimos 30 días (excluye teletrabajo/home_office)
     start_30 = target_date - timedelta(days=29)
     approved_30 = (
         db.query(LeaveRequest)
         .filter(
             LeaveRequest.status == "aprobada",
+            LeaveRequest.request_type.in_(ABSENCE_TYPES),
             LeaveRequest.end_date >= start_30,
             LeaveRequest.start_date <= target_date,
         )
@@ -164,15 +178,34 @@ def generate_daily_report(db: Session, target_date: date | None = None) -> Daily
         int(sum(c.latency_ms for c in prev_chats) / len(prev_chats)) if prev_chats else 0
     )
 
-    unanswered_questions = [
-        {
-            "question": c.question,
-            "topic": c.topic,
-            "created_at": c.created_at.isoformat() if c.created_at else target_date.isoformat(),
-        }
-        for c, _ in reversed(all_chats)
-        if c.outcome == "escalada_rrhh"
-    ][:10]
+    # Agrupar preguntas equivalentes de forma conservadora conservando registros originales en chat_logs
+    grouped_unanswered: Dict[str, Dict[str, Any]] = {}
+    for c, local_d in all_chats:
+        if c.outcome != "escalada_rrhh":
+            continue
+        norm_key = normalize_text(c.question)
+        if not norm_key:
+            continue
+        c_dt = c.created_at if c.created_at.tzinfo else c.created_at.replace(tzinfo=timezone.utc)
+        local_iso = c_dt.astimezone(tz).isoformat()
+        if norm_key not in grouped_unanswered:
+            grouped_unanswered[norm_key] = {
+                "question": c.question,
+                "topic": c.topic,
+                "count": 1,
+                "last_asked_at": local_iso,
+            }
+        else:
+            grouped_unanswered[norm_key]["count"] += 1
+            if local_iso > grouped_unanswered[norm_key]["last_asked_at"]:
+                grouped_unanswered[norm_key]["last_asked_at"] = local_iso
+                grouped_unanswered[norm_key]["question"] = c.question
+
+    unanswered_questions = sorted(
+        grouped_unanswered.values(),
+        key=lambda x: (x["count"], x["last_asked_at"]),
+        reverse=True,
+    )[:15]
 
     # 5. Indicadores mensuales y de plantilla (incluyendo incapacidades que inician antes del mes)
     month_start = target_date.replace(day=1)
@@ -216,11 +249,17 @@ def generate_daily_report(db: Session, target_date: date | None = None) -> Daily
         or 0
     )
 
+    departments_catalog = sorted(
+        {row[0] for row in db.query(Employee.department).filter(Employee.status == "activo").distinct().all() if row[0]}
+    )
+
     payload_json = {
         "absences_last_30_days": absences_last_30_days,
         "top_5_topics": top_5_topics,
         "absences_by_type": [{"name": k, "value": len(v)} for k, v in by_type_map.items()],
         "absences_by_department": [{"department": k, "count": len(v)} for k, v in by_dept_map.items()],
+        "today_absent_records": today_absent_records,
+        "departments_catalog": departments_catalog,
         "pending_requests_list": pending_list,
         "unanswered_questions": unanswered_questions,
         "active_headcount": active_headcount,

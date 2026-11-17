@@ -41,20 +41,21 @@ def test_functional_requirements():
         assert "10 días hábiles" in c1["answer"]
         assert any(cit["policy_code"] == "RH-01" for cit in c1["citations"])
 
-        # 2. Saldo propio (dato_personal)
+        # 2. Saldo propio (dato_personal) coherente con RH-01 (15 asignados, 2 disfrutados, 4 pendientes = 9 disponibles)
         c2 = client.post("/api/chat", json={"question": "¿Cuántos días me quedan?"}, headers=collab_headers).json()
         assert c2["intent"] == "dato_personal"
-        assert "14 días disponibles" in c2["answer"]
+        assert "9 días disponibles" in c2["answer"]
+        assert "4 días reservados" in c2["answer"]
 
-        # 3. Mixta sin contradicciones
+        # 3. Mixta sin contradicciones (saldo + plazo de 6 meses tras aniversario)
         c3 = client.post(
             "/api/chat",
             json={"question": "¿Cuántos días me quedan y puedo usarlos el próximo año?"},
             headers=collab_headers,
         ).json()
         assert c3["intent"] == "mixta"
-        assert "14 días disponibles" in c3["answer"]
-        assert "18 meses" in c3["answer"]
+        assert "9 días disponibles" in c3["answer"]
+        assert "6 meses" in c3["answer"]
         assert "no puedo responder" not in c3["answer"].lower()
         assert any(cit["policy_code"] == "RH-01" for cit in c3["citations"])
 
@@ -151,13 +152,23 @@ def test_validator_and_analyst_cross_month():
     try:
         emp = db.query(Employee).filter(Employee.email == "ana.garcia@nubera.mx").first()
         # Validador con dato_personal y contradicción en mixta
-        v_ok = validate_response(emp, "dato_personal", "Tienes 14 días disponibles.", [], ["14"], False)
+        v_ok = validate_response(emp, "dato_personal", "Tienes 9 días disponibles.", [], ["9"], False)
         assert v_ok["valid"] is True
-        v_bad = validate_response(emp, "mixta", "Tienes 14 días disponibles. No puedo responder esa pregunta.", [{"policy_code": "RH-01"}], ["14"], False)
+        v_bad = validate_response(emp, "mixta", "Tienes 9 días disponibles. No puedo responder esa pregunta.", [{"policy_code": "RH-01"}], ["9"], False)
         assert v_bad["valid"] is False
 
-        # Incapacidad que inicia antes del mes y cruza cambio de mes
+        # Home office excluido de ausencias y catálogo completo de departamentos
         target_d = date(2026, 11, 10)
+        ho_req = LeaveRequest(
+            employee_id=emp.id,
+            request_type="home_office",
+            start_date=target_d,
+            end_date=target_d,
+            days_count=1,
+            status="aprobada",
+            reason="Teletrabajo prueba",
+        )
+        # Incapacidad que inicia antes del mes y cruza cambio de mes
         lr_cross = LeaveRequest(
             employee_id=emp.id,
             request_type="incapacidad",
@@ -167,10 +178,11 @@ def test_validator_and_analyst_cross_month():
             status="aprobada",
             reason="Prueba cruce de mes",
         )
-        db.add(lr_cross)
+        db.add_all([ho_req, lr_cross])
         db.commit()
         rep = generate_daily_report(db, target_d)
-        # Del 1 al 5 de noviembre son 5 días acumulados en noviembre
         assert rep.monthly_disability_days >= 5
+        assert not any("home office" in t["name"].lower() for t in rep.payload_json["absences_by_type"])
+        assert len(rep.payload_json["departments_catalog"]) >= 6
     finally:
         db.close()

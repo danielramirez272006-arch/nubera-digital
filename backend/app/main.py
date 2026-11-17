@@ -57,7 +57,8 @@ from app.agents.orchestrator import process_chat_query
 from app.agents.analyst_agent import generate_daily_report
 from app.agents.ingestion_agent import sync_drive_policies
 from app.agents.escalation_agent import create_ticket
-from app.agents.payment_schedule import get_next_payment_info
+from app.agents.payment_schedule import get_next_payment_info, _parse_calendar_from_db
+from app.agents.vacation_rules import compute_vacation_entitlement
 from app.seed import seed_database
 
 scheduler = BackgroundScheduler(timezone=ZoneInfo(settings.TIMEZONE))
@@ -258,6 +259,8 @@ def get_my_data(current_user: Employee = Depends(get_current_user), db: Session 
         .limit(10)
         .all()
     )
+    today_mx = datetime.now(ZoneInfo(settings.TIMEZONE)).date()
+    vac_info = compute_vacation_entitlement(current_user.hire_date, today_mx)
     return MyDataResponse(
         employee=user_out,
         balances=[
@@ -268,6 +271,13 @@ def get_my_data(current_user: Employee = Depends(get_current_user), db: Session 
                 pending_days=float(b.pending_days),
                 available_days=float(b.available_days),
                 expiration_date=b.expiration_date,
+                years_of_service=vac_info["years_of_service"],
+                period_start=vac_info["period_start"],
+                period_end=vac_info["period_end"],
+                anniversary_date=vac_info["anniversary_date"],
+                next_anniversary_date=vac_info["next_anniversary_date"],
+                six_month_deadline=vac_info["six_month_deadline"],
+                origin_note=f"Tabla RH-01 ({vac_info['years_of_service']} años cumplidos). Las solicitudes pendientes reservan saldo.",
             )
             for b in balances
         ],
@@ -475,12 +485,13 @@ def update_ticket(
 
 # --- Solicitudes (Colaborador y RRHH) ---
 
-def _count_business_days(start_d: date, end_d: date) -> int:
+def _count_business_days(start_d: date, end_d: date, holidays: set[date] | None = None) -> int:
     from datetime import timedelta
+    hol = holidays or set()
     days = 0
     cur = start_d
     while cur <= end_d:
-        if cur.weekday() < 5:
+        if cur.weekday() < 5 and cur not in hol:
             days += 1
         cur += timedelta(days=1)
     return days
@@ -497,12 +508,13 @@ def create_leave_request(
         raise HTTPException(status_code=400, detail="La fecha de fin debe ser posterior o igual a la fecha de inicio.")
 
     today = datetime.now(ZoneInfo(settings.TIMEZONE)).date()
-    days_count = _count_business_days(payload.start_date, payload.end_date)
+    _, holidays = _parse_calendar_from_db(db)
+    days_count = _count_business_days(payload.start_date, payload.end_date, holidays)
     if days_count <= 0:
         raise HTTPException(status_code=400, detail="El periodo seleccionado debe incluir al menos un día hábil.")
 
     if payload.request_type == "vacaciones":
-        lead_business_days = _count_business_days(today + timedelta(days=1), payload.start_date)
+        lead_business_days = _count_business_days(today + timedelta(days=1), payload.start_date, holidays)
         if lead_business_days < 10:
             raise HTTPException(
                 status_code=400,
@@ -727,7 +739,11 @@ def list_documents(
                 alert_type=a.alert_type,
                 severity=a.severity,
                 detail=a.detail,
+                status=getattr(a, "status", "revisada" if a.resolved else "activa"),
+                occurrence_count=getattr(a, "occurrence_count", 1),
                 resolved=a.resolved,
+                last_seen_at=getattr(a, "last_seen_at", a.created_at),
+                resolved_at=getattr(a, "resolved_at", None),
                 created_at=a.created_at,
             )
             for a in alerts
@@ -844,6 +860,8 @@ def resolve_document_alert(
     alert = db.query(DocumentAuditAlert).filter(DocumentAuditAlert.id == alert_id).first()
     if not alert:
         raise HTTPException(status_code=404, detail="Alerta no encontrada.")
+    alert.status = "revisada"
     alert.resolved = True
+    alert.resolved_at = datetime.now(timezone.utc)
     db.commit()
-    return {"status": "ok", "id": alert.id}
+    return {"status": "ok", "id": alert.id, "alert_status": alert.status}

@@ -169,7 +169,11 @@ class DocumentAuditAlert(Base):
     alert_type = Column(String(40), nullable=False)
     severity = Column(String(20), nullable=False, default="media")
     detail = Column(Text, nullable=False)
+    status = Column(String(20), nullable=False, default="activa")  # activa | revisada | resuelta
+    occurrence_count = Column(Integer, nullable=False, default=1)
     resolved = Column(Boolean, nullable=False, default=False)
+    last_seen_at = Column(DateTime(timezone=True), default=utcnow)
+    resolved_at = Column(DateTime(timezone=True), nullable=True)
     created_at = Column(DateTime(timezone=True), default=utcnow)
 
 

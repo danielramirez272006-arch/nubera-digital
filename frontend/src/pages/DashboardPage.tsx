@@ -104,8 +104,29 @@ export default function DashboardPage() {
   }
 
   const allPending = report?.payload_json?.pending_requests_list || [];
-  const departments = ['Todos', ...Array.from(new Set(allPending.map((p) => p.department)))];
+  const departments = ['Todos', ...(report?.payload_json?.departments_catalog || Array.from(new Set(allPending.map((p) => p.department))).sort())];
   const filteredPending = deptFilter === 'Todos' ? allPending : allPending.filter((p) => p.department === deptFilter);
+  const filteredOver3 = filteredPending.filter((p) => p.is_over_3_days).length;
+
+  const absentRecords = report?.payload_json?.today_absent_records || [];
+  const filteredAbsentRecords = deptFilter === 'Todos' ? absentRecords : absentRecords.filter((r) => r.department === deptFilter);
+  const filteredAbsencesToday = deptFilter === 'Todos' ? (report?.absences_today ?? 0) : new Set(filteredAbsentRecords.map((r) => r.employee_id)).size;
+  const filteredDisabilitiesToday = deptFilter === 'Todos' ? (report?.active_disabilities ?? 0) : new Set(filteredAbsentRecords.filter((r) => r.is_disability).map((r) => r.employee_id)).size;
+
+  const filteredByType = deptFilter === 'Todos'
+    ? (report?.payload_json?.absences_by_type || [])
+    : Object.entries(
+        filteredAbsentRecords.reduce<Record<string, Set<number>>>((acc, r) => {
+          if (!acc[r.request_type]) acc[r.request_type] = new Set();
+          acc[r.request_type].add(r.employee_id);
+          return acc;
+        }, {})
+      ).map(([name, s]) => ({ name, value: s.size }));
+
+  const filteredByDept = deptFilter === 'Todos'
+    ? (report?.payload_json?.absences_by_department || [])
+    : (report?.payload_json?.absences_by_department || []).filter((d) => d.department === deptFilter);
+
   const trendData = (report?.payload_json?.absences_last_30_days || []).slice(-periodDays);
 
   return (
@@ -193,26 +214,26 @@ export default function DashboardPage() {
 
           <div className="kpi-grid-4">
             <div className="card">
-              <div className="kpi-label">Ausencias de hoy</div>
-              <div className="kpi-value">{report.absences_today}</div>
+              <div className="kpi-label">Ausencias de hoy {deptFilter !== 'Todos' ? `(${deptFilter})` : ''}</div>
+              <div className="kpi-value">{filteredAbsencesToday}</div>
             </div>
             <div className="card">
-              <div className="kpi-label">Solicitudes pendientes</div>
+              <div className="kpi-label">Solicitudes pendientes {deptFilter !== 'Todos' ? `(${deptFilter})` : ''}</div>
               <div className="kpi-value">
-                {report.pending_requests}{' '}
-                {report.pending_over_3_days > 0 && (
+                {filteredPending.length}{' '}
+                {filteredOver3 > 0 && (
                   <span className="badge badge-warning" style={{ fontSize: '0.75rem', verticalAlign: 'middle' }}>
-                    {report.pending_over_3_days} &gt; 3 días
+                    {filteredOver3} &gt; 3 días
                   </span>
                 )}
               </div>
             </div>
             <div className="card">
-              <div className="kpi-label">Incapacidades activas</div>
-              <div className="kpi-value">{report.active_disabilities}</div>
+              <div className="kpi-label">Incapacidades activas {deptFilter !== 'Todos' ? `(${deptFilter})` : ''}</div>
+              <div className="kpi-value">{filteredDisabilitiesToday}</div>
             </div>
             <div className="card">
-              <div className="kpi-label">Resueltas sin escalar</div>
+              <div className="kpi-label">Resueltas sin escalar (global)</div>
               <div className="kpi-value" style={{ color: 'var(--accent)' }}>
                 {report.resolved_without_escalation_pct}%
               </div>
@@ -284,15 +305,15 @@ export default function DashboardPage() {
 
           <div className="charts-grid-2">
             <section className="card">
-              <h2 style={{ margin: '0 0 0.75rem', fontSize: '1rem' }}>Desglose de ausencias del día</h2>
+              <h2 style={{ margin: '0 0 0.75rem', fontSize: '1rem' }}>Desglose de ausencias del día (excluye teletrabajo)</h2>
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem', fontSize: '0.88rem' }}>
                 <div>
                   <strong style={{ color: 'var(--text-secondary)' }}>Por tipo</strong>
-                  {(report.payload_json?.absences_by_type || []).length === 0 ? (
-                    <p style={{ color: 'var(--text-secondary)' }}>Sin ausencias.</p>
+                  {filteredByType.length === 0 ? (
+                    <p style={{ color: 'var(--text-secondary)' }}>Sin ausencias para este departamento.</p>
                   ) : (
                     <ul style={{ paddingLeft: '1.1rem', margin: '0.5rem 0 0' }}>
-                      {report.payload_json.absences_by_type.map((t) => (
+                      {filteredByType.map((t) => (
                         <li key={t.name}>{t.name}: <strong>{t.value}</strong></li>
                       ))}
                     </ul>
@@ -300,11 +321,11 @@ export default function DashboardPage() {
                 </div>
                 <div>
                   <strong style={{ color: 'var(--text-secondary)' }}>Por departamento</strong>
-                  {(report.payload_json?.absences_by_department || []).length === 0 ? (
-                    <p style={{ color: 'var(--text-secondary)' }}>Sin ausencias.</p>
+                  {filteredByDept.length === 0 ? (
+                    <p style={{ color: 'var(--text-secondary)' }}>Sin ausencias para este departamento.</p>
                   ) : (
                     <ul style={{ paddingLeft: '1.1rem', margin: '0.5rem 0 0' }}>
-                      {report.payload_json.absences_by_department.map((d) => (
+                      {filteredByDept.map((d) => (
                         <li key={d.department}>{d.department}: <strong>{d.count}</strong></li>
                       ))}
                     </ul>
@@ -320,13 +341,19 @@ export default function DashboardPage() {
                 <div>Latencia promedio: <strong>{report.prev_day_avg_latency_ms} ms</strong></div>
               </div>
               <div style={{ fontSize: '0.85rem' }}>
-                <strong style={{ color: 'var(--text-secondary)' }}>Preguntas sin respaldo documental:</strong>
+                <strong style={{ color: 'var(--text-secondary)' }}>Preguntas sin respaldo documental (agrupadas):</strong>
                 {(report.payload_json?.unanswered_questions || []).length === 0 ? (
                   <p style={{ color: 'var(--text-secondary)', margin: '0.4rem 0 0' }}>Ninguna registrada.</p>
                 ) : (
-                  <ul style={{ paddingLeft: '1.1rem', margin: '0.4rem 0 0' }}>
-                    {report.payload_json.unanswered_questions.slice(0, 5).map((q, idx) => (
-                      <li key={idx}>{q.question}</li>
+                  <ul style={{ paddingLeft: '1.1rem', margin: '0.4rem 0 0', display: 'flex', flexDirection: 'column', gap: '0.35rem' }}>
+                    {report.payload_json.unanswered_questions.slice(0, 6).map((q, idx) => (
+                      <li key={idx}>
+                        <span>{q.question}</span>{' '}
+                        <span className="badge badge-accent">{q.count || 1}x</span>{' '}
+                        <span style={{ color: 'var(--text-secondary)', fontSize: '0.78rem' }}>
+                          ({q.topic} · última: {new Date(q.last_asked_at || q.created_at || '').toLocaleDateString('es-MX', { timeZone: 'America/Mexico_City' })})
+                        </span>
+                      </li>
                     ))}
                   </ul>
                 )}

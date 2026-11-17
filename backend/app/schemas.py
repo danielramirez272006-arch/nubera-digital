@@ -82,6 +82,13 @@ class BalanceOut(BaseModel):
     pending_days: float
     available_days: float
     expiration_date: date
+    years_of_service: int = 0
+    period_start: Optional[date] = None
+    period_end: Optional[date] = None
+    anniversary_date: Optional[date] = None
+    next_anniversary_date: Optional[date] = None
+    six_month_deadline: Optional[date] = None
+    origin_note: str = "Cálculo automático según tabla de antigüedad RH-01"
 
 
 class LeaveRequestOut(BaseModel):
@@ -185,7 +192,11 @@ class DocumentAlertOut(BaseModel):
     alert_type: str
     severity: str
     detail: str
+    status: str = "activa"
+    occurrence_count: int = 1
     resolved: bool
+    last_seen_at: Optional[datetime] = None
+    resolved_at: Optional[datetime] = None
     created_at: datetime
 
 

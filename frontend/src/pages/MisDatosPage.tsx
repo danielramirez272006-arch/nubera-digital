@@ -100,10 +100,15 @@ export default function MisDatosPage() {
       <div className="kpi-grid-4" style={{ marginBottom: 0 }}>
         <div className="card">
           <div className="kpi-label">Saldo de vacaciones ({bal?.year})</div>
-          <div className="kpi-value" style={{ color: 'var(--accent)' }}>{bal ? `${bal.available_days} días` : '—'}</div>
-          <div style={{ fontSize: '0.78rem', color: 'var(--text-secondary)', marginTop: 4 }}>
-            Vigencia: {bal?.expiration_date || '—'}
-          </div>
+          <div className="kpi-value" style={{ color: 'var(--accent)' }}>{bal ? `${bal.available_days} días disponibles` : '—'}</div>
+          {bal && (
+            <div style={{ fontSize: '0.78rem', color: 'var(--text-secondary)', marginTop: 6, lineHeight: 1.45 }}>
+              <div><strong>Asignados:</strong> {bal.entitled_days} · <strong>Disfrutados:</strong> {bal.used_days} · <strong>Pendientes (reservados):</strong> {bal.pending_days}</div>
+              <div><strong>Periodo:</strong> {bal.period_start || '—'} al {bal.period_end || '—'}</div>
+              <div><strong>Aniversario:</strong> {bal.anniversary_date || '—'} · <strong>Plazo 6 meses (RH-01):</strong> {bal.six_month_deadline || bal.expiration_date}</div>
+              {bal.origin_note && <div style={{ marginTop: 2, fontStyle: 'italic' }}>{bal.origin_note}</div>}
+            </div>
+          )}
           <button
             type="button"
             className="chip-btn"

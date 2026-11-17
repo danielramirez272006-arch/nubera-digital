@@ -39,13 +39,21 @@ export default function DocumentosPage() {
     loadDocs();
   }
 
+  function fmtCdmx(iso?: string | null) {
+    if (!iso) return '—';
+    return new Date(iso).toLocaleString('es-MX', { timeZone: 'America/Mexico_City' });
+  }
+
+  const activeAlerts = data?.alerts.filter((a) => a.status === 'activa' || (!a.resolved && a.status !== 'revisada' && a.status !== 'resuelta')) || [];
+  const historyAlerts = data?.alerts.filter((a) => a.status === 'revisada' || a.status === 'resuelta' || a.resolved) || [];
+
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '0.75rem' }}>
         <div>
           <h1 style={{ margin: '0 0 0.25rem', fontSize: '1.5rem' }}>Estado documental y sincronización Drive</h1>
           <p style={{ margin: 0, color: 'var(--text-secondary)', fontSize: '0.9rem' }}>
-            Última sincronización: {data?.last_synced_at ? new Date(data.last_synced_at).toLocaleString('es-MX') : '—'} ·{' '}
+            Última sincronización (CDMX): {fmtCdmx(data?.last_synced_at)} ·{' '}
             {data?.total_active_documents ?? 0} documentos activos · {data?.total_chunks ?? 0} fragmentos indexados
           </p>
         </div>
@@ -54,27 +62,72 @@ export default function DocumentosPage() {
         </button>
       </div>
 
-      {data && data.alerts.length > 0 && (
-        <section className="card" aria-label="Alertas documentales">
-          <h2 style={{ margin: '0 0 0.75rem', fontSize: '1rem', color: 'var(--warning)' }}>
-            <AlertTriangle size={16} style={{ verticalAlign: 'middle', marginRight: 6 }} />
-            Alertas de calidad y seguridad documental ({data.alerts.filter((a) => !a.resolved).length} activas)
-          </h2>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
-            {data.alerts.map((a) => (
-              <div key={a.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '0.5rem', padding: '0.5rem 0.75rem', background: a.resolved ? 'var(--bg-page)' : 'var(--warning-soft)', borderRadius: 8 }}>
+      {/* Estado actual de sincronización */}
+      <section className="card" aria-label="Estado actual de sincronización">
+        <h2 style={{ margin: '0 0 0.5rem', fontSize: '1rem', color: activeAlerts.length > 0 ? 'var(--warning)' : 'var(--success)' }}>
+          {activeAlerts.length > 0 ? (
+            <>
+              <AlertTriangle size={16} style={{ verticalAlign: 'middle', marginRight: 6 }} />
+              Alertas activas que requieren revisión ({activeAlerts.length})
+            </>
+          ) : (
+            <>
+              <CheckCircle2 size={16} style={{ verticalAlign: 'middle', marginRight: 6 }} />
+              Sincronización saludable: 0 alertas activas
+            </>
+          )}
+        </h2>
+        {activeAlerts.length > 0 && (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem', marginTop: '0.5rem' }}>
+            {activeAlerts.map((a) => (
+              <div key={a.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '0.5rem', padding: '0.6rem 0.75rem', background: 'var(--warning-soft)', borderRadius: 8 }}>
                 <div style={{ fontSize: '0.86rem' }}>
-                  <strong>{a.title}</strong> ({a.alert_type}) — {a.detail}
+                  <strong>{a.title}</strong> ({a.alert_type} · {a.occurrence_count}x) — {a.detail}
+                  <div style={{ fontSize: '0.76rem', color: 'var(--text-secondary)' }}>
+                    Detectada: {fmtCdmx(a.created_at)} · Última ocurrencia: {fmtCdmx(a.last_seen_at)}
+                  </div>
                 </div>
-                {a.resolved ? (
-                  <span className="badge badge-success"><CheckCircle2 size={12} /> Resuelta</span>
-                ) : (
-                  <button type="button" className="btn btn-secondary" style={{ padding: '0.25rem 0.6rem', fontSize: '0.78rem' }} onClick={() => resolveAlert(a.id)}>
-                    Marcar revisada
-                  </button>
-                )}
+                <button type="button" className="btn btn-secondary" style={{ padding: '0.25rem 0.6rem', fontSize: '0.78rem' }} onClick={() => resolveAlert(a.id)}>
+                  Marcar revisada
+                </button>
               </div>
             ))}
+          </div>
+        )}
+      </section>
+
+      {historyAlerts.length > 0 && (
+        <section className="card" aria-label="Historial de alertas">
+          <h2 style={{ margin: '0 0 0.75rem', fontSize: '1rem' }}>Historial de alertas ({historyAlerts.length})</h2>
+          <div className="table-scroll">
+            <table>
+              <thead>
+                <tr>
+                  <th>Documento</th>
+                  <th>Tipo</th>
+                  <th>Ocurrencias</th>
+                  <th>Detección (CDMX)</th>
+                  <th>Última ocurrencia</th>
+                  <th>Estado</th>
+                </tr>
+              </thead>
+              <tbody>
+                {historyAlerts.map((a) => (
+                  <tr key={a.id}>
+                    <td><strong>{a.title}</strong></td>
+                    <td>{a.alert_type}</td>
+                    <td>{a.occurrence_count}x</td>
+                    <td>{fmtCdmx(a.created_at)}</td>
+                    <td>{fmtCdmx(a.last_seen_at)}</td>
+                    <td>
+                      <span className={`badge ${a.status === 'resuelta' ? 'badge-success' : 'badge-accent'}`}>
+                        {a.status === 'resuelta' ? 'Resuelta' : 'Revisada'}
+                      </span>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
           </div>
         </section>
       )}

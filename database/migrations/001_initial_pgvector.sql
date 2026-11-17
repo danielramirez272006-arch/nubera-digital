@@ -114,7 +114,11 @@ CREATE TABLE IF NOT EXISTS document_audit_alerts (
     alert_type VARCHAR(40) NOT NULL CHECK (alert_type IN ('metadato_faltante', 'version_contradictoria', 'error_sincronizacion', 'inyeccion_detectada')),
     severity VARCHAR(20) NOT NULL DEFAULT 'media',
     detail TEXT NOT NULL,
+    status VARCHAR(20) NOT NULL DEFAULT 'activa',
+    occurrence_count INTEGER NOT NULL DEFAULT 1,
     resolved BOOLEAN NOT NULL DEFAULT FALSE,
+    last_seen_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    resolved_at TIMESTAMP WITH TIME ZONE NULL,
     created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );
 

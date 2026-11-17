@@ -21,6 +21,7 @@ from app.auth import hash_password
 from app.agents.ingestion_agent import sync_drive_policies
 from app.agents.analyst_agent import generate_daily_report
 from app.agents.payment_schedule import get_next_payment_info
+from app.agents.vacation_rules import compute_vacation_entitlement
 
 
 DEPARTMENTS = [
@@ -48,6 +49,32 @@ LAST_NAMES = [
 ]
 
 
+def _reconcile_balances(db: Session, today: date) -> None:
+    """Alinea saldos con la tabla RH-01, el plazo de 6 meses y la reserva de solicitudes pendientes."""
+    all_emps = db.query(Employee).all()
+    for emp in all_emps:
+        vac_info = compute_vacation_entitlement(emp.hire_date, today)
+        pending_vac = (
+            db.query(LeaveRequest)
+            .filter(
+                LeaveRequest.employee_id == emp.id,
+                LeaveRequest.request_type == "vacaciones",
+                LeaveRequest.status == "pendiente",
+            )
+            .all()
+        )
+        reserved = sum(float(r.days_count) for r in pending_vac)
+        bal = db.query(Balance).filter(Balance.employee_id == emp.id).order_by(Balance.year.desc()).first()
+        if bal:
+            entitled = float(vac_info["entitled_days"])
+            used = float(bal.used_days)
+            bal.entitled_days = entitled
+            bal.pending_days = reserved
+            bal.available_days = max(0.0, entitled - used - reserved)
+            bal.expiration_date = vac_info["six_month_deadline"]
+    db.commit()
+
+
 def seed_database(db: Session) -> None:
     sync_drive_policies(db)
     tz = ZoneInfo(settings.TIMEZONE)
@@ -66,6 +93,16 @@ def seed_database(db: Session) -> None:
             for emp in outdated:
                 emp.next_payment_date = next_pay
             db.commit()
+
+        _reconcile_balances(db, today)
+
+        # Regenerar reportes existentes si aún tienen Home office o estructura anterior
+        existing_reports = db.query(DailyReport).all()
+        for rep in existing_reports:
+            pj = rep.payload_json or {}
+            has_ho = any("home office" in str(t.get("name", "")).lower() for t in pj.get("absences_by_type", []))
+            if has_ho or "departments_catalog" not in pj:
+                generate_daily_report(db, rep.report_date)
 
         if not db.query(DailyReport).filter(DailyReport.report_date == today).first():
             generate_daily_report(db, today)
@@ -165,16 +202,18 @@ def seed_database(db: Session) -> None:
         db.flush()
         created_employees.append(emp)
 
-        avail = u["entitled"] - u["used"] - u["pending"]
+        vac_info = compute_vacation_entitlement(emp.hire_date, today)
+        entitled = vac_info["entitled_days"]
+        used = u["used"]
         db.add(
             Balance(
                 employee_id=emp.id,
                 year=today.year,
-                entitled_days=u["entitled"],
-                used_days=u["used"],
-                pending_days=u["pending"],
-                available_days=avail,
-                expiration_date=date(today.year + 1, 3, 31),
+                entitled_days=entitled,
+                used_days=used,
+                pending_days=0,
+                available_days=max(0, entitled - used),
+                expiration_date=vac_info["six_month_deadline"],
             )
         )
 
@@ -218,12 +257,9 @@ def seed_database(db: Session) -> None:
         db.flush()
         created_employees.append(emp)
 
-        if idx in (6, 9, 14, 19, 24, 31, 38):
-            entitled = rng.choice([22, 24, 26])
-            used = rng.choice([0, 1, 2])
-        else:
-            entitled = rng.choice([12, 14, 16, 18, 20])
-            used = rng.randint(0, min(8, entitled - 2))
+        vac_info = compute_vacation_entitlement(emp.hire_date, today)
+        entitled = vac_info["entitled_days"]
+        used = rng.randint(0, min(4, max(0, entitled - 2))) if entitled > 0 else 0
 
         db.add(
             Balance(
@@ -232,8 +268,8 @@ def seed_database(db: Session) -> None:
                 entitled_days=entitled,
                 used_days=used,
                 pending_days=0,
-                available_days=entitled - used,
-                expiration_date=date(today.year + 1, 3, 31),
+                available_days=max(0, entitled - used),
+                expiration_date=vac_info["six_month_deadline"],
             )
         )
 
@@ -336,7 +372,7 @@ def seed_database(db: Session) -> None:
             )
 
     pending_specs = [
-        (created_employees[0], "vacaciones", today + timedelta(days=15), today + timedelta(days=18), 4, 5),
+        (created_employees[0], "vacaciones", today + timedelta(days=15), today + timedelta(days=20), 4, 5),
         (created_employees[7], "vacaciones", today + timedelta(days=20), today + timedelta(days=24), 5, 6),
         (created_employees[12], "permiso_con_goce", today + timedelta(days=6), today + timedelta(days=7), 2, 4),
         (created_employees[18], "vacaciones", today + timedelta(days=18), today + timedelta(days=20), 3, 1),
@@ -422,6 +458,7 @@ def seed_database(db: Session) -> None:
             )
 
     db.commit()
+    _reconcile_balances(db, today)
 
     for d_off in range(9, -1, -1):
         generate_daily_report(db, today - timedelta(days=d_off))

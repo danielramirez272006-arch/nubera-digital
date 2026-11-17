@@ -7,6 +7,7 @@ from app.config import settings
 from app.models import Employee, Balance, LeaveRequest, Disability
 from app.agents.embeddings import normalize_text
 from app.agents.payment_schedule import get_next_payment_info
+from app.agents.vacation_rules import compute_vacation_entitlement
 
 
 def answer_employee_question(db: Session, current_user: Employee, question: str) -> Dict[str, Any]:
@@ -60,18 +61,29 @@ def answer_employee_question(db: Session, current_user: Employee, question: str)
                 "data_type": "vacaciones",
                 "tool_figures": [],
             }
+        today = datetime.now(ZoneInfo(settings.TIMEZONE)).date()
+        vac_info = compute_vacation_entitlement(current_user.hire_date, today)
+        ent_str = f"{float(balance.entitled_days):g}"
+        used_str = f"{float(balance.used_days):g}"
+        pend_str = f"{float(balance.pending_days):g}"
         avail_str = f"{float(balance.available_days):g}"
-        exp_str = balance.expiration_date.strftime("%d/%m/%Y")
+        anniv_str = vac_info["anniversary_date"].strftime("%d/%m/%Y")
+        p_start_str = vac_info["period_start"].strftime("%d/%m/%Y")
+        p_end_str = vac_info["period_end"].strftime("%d/%m/%Y")
+        dead_str = vac_info["six_month_deadline"].strftime("%d/%m/%Y")
         return {
             "answer": (
-                f"Hola {current_user.full_name}, en tu periodo vigente ({balance.year}) tienes "
-                f"**{avail_str} días disponibles** de vacaciones "
-                f"(de {float(balance.entitled_days):g} días correspondientes, {float(balance.used_days):g} disfrutados "
-                f"y {float(balance.pending_days):g} en solicitud pendiente). "
-                f"Tu saldo actual tiene vigencia hasta el **{exp_str}**."
+                f"Hola {current_user.full_name}, tu ingreso fue el **{current_user.hire_date.strftime('%d/%m/%Y')}** "
+                f"({vac_info['years_of_service']} años cumplidos; último aniversario: **{anniv_str}**). "
+                f"En tu periodo vigente (**{p_start_str} al {p_end_str}**) tienes **{avail_str} días disponibles** "
+                f"de vacaciones (**{ent_str} días asignados** según tabla RH-01, **{used_str} disfrutados** y "
+                f"**{pend_str} días reservados en solicitudes pendientes**). "
+                f"Conforme a RH-01, el periodo se asigna por aniversario (puede cruzar diciembre) y debe programarse "
+                f"dentro de los **6 meses posteriores al aniversario** (fecha límite de referencia: **{dead_str}**; "
+                f"si existen días pendientes, Operaciones de RRHH revisa el caso para agendar su disfrute)."
             ),
             "data_type": "vacaciones",
-            "tool_figures": [avail_str, exp_str],
+            "tool_figures": [avail_str, ent_str, pend_str],
         }
 
     if any(k in q_norm for k in ["incapacidad", "incapacidades"]):

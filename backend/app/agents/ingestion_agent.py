@@ -373,6 +373,63 @@ def _fetch_real_drive_documents() -> List[Dict[str, Any]]:
     return docs
 
 
+def _upsert_alert(
+    db: Session,
+    drive_file_id: str,
+    title: str,
+    alert_type: str,
+    severity: str,
+    detail: str,
+) -> None:
+    """Registra o actualiza una alerta sin duplicarla en cada ejecución."""
+    now = datetime.now(timezone.utc)
+    existing = (
+        db.query(DocumentAuditAlert)
+        .filter(
+            DocumentAuditAlert.drive_file_id == drive_file_id,
+            DocumentAuditAlert.alert_type == alert_type,
+            DocumentAuditAlert.status != "resuelta",
+        )
+        .first()
+    )
+    if existing:
+        existing.occurrence_count = (existing.occurrence_count or 1) + 1
+        existing.last_seen_at = now
+        existing.detail = detail
+        existing.title = title
+    else:
+        db.add(
+            DocumentAuditAlert(
+                drive_file_id=drive_file_id,
+                title=title,
+                alert_type=alert_type,
+                severity=severity,
+                detail=detail,
+                status="activa",
+                occurrence_count=1,
+                resolved=False,
+                last_seen_at=now,
+            )
+        )
+
+
+def _resolve_sync_error_alerts(db: Session) -> None:
+    """Marca como resueltas las alertas de sincronización cuando Drive responde correctamente."""
+    now = datetime.now(timezone.utc)
+    open_errors = (
+        db.query(DocumentAuditAlert)
+        .filter(
+            DocumentAuditAlert.alert_type == "error_sincronizacion",
+            DocumentAuditAlert.status != "resuelta",
+        )
+        .all()
+    )
+    for al in open_errors:
+        al.status = "resuelta"
+        al.resolved = True
+        al.resolved_at = now
+
+
 def sync_drive_policies(db: Session, override_docs: List[Dict[str, Any]] | None = None) -> Dict[str, int]:
     """
     Agente de ingesta: sincroniza políticas desde Google Drive (o catálogo de demostración),
@@ -384,26 +441,25 @@ def sync_drive_policies(db: Session, override_docs: List[Dict[str, Any]] | None 
         try:
             source_docs = _fetch_real_drive_documents()
             if not source_docs:
-                db.add(
-                    DocumentAuditAlert(
-                        drive_file_id=settings.GOOGLE_DRIVE_FOLDER_ID,
-                        title="Carpeta de Google Drive vacía",
-                        alert_type="error_sincronizacion",
-                        severity="media",
-                        detail="No se encontraron PDFs, Google Docs ni Google Sheets en la carpeta configurada. Se conserva el último índice válido.",
-                    )
+                _upsert_alert(
+                    db,
+                    settings.GOOGLE_DRIVE_FOLDER_ID,
+                    "Carpeta de Google Drive vacía",
+                    "error_sincronizacion",
+                    "media",
+                    "No se encontraron PDFs, Google Docs ni Google Sheets en la carpeta configurada. Se conserva el último índice válido.",
                 )
                 db.commit()
                 return {"added": 0, "updated": 0, "deleted": 0, "unchanged": db.query(DriveDocument).filter(DriveDocument.status == "activo").count(), "alerts": 1}
+            _resolve_sync_error_alerts(db)
         except Exception as exc:
-            db.add(
-                DocumentAuditAlert(
-                    drive_file_id="drive-sync-error",
-                    title="Error de sincronización Google Drive",
-                    alert_type="error_sincronizacion",
-                    severity="alta",
-                    detail=f"Se conservó el último índice válido. Detalle: {exc}",
-                )
+            _upsert_alert(
+                db,
+                "drive-sync-error",
+                "Error de sincronización Google Drive",
+                "error_sincronizacion",
+                "alta",
+                f"Se conservó el último índice válido. Detalle: {exc}",
             )
             db.commit()
             has_existing = db.query(DriveDocument).filter(DriveDocument.status == "activo").count() > 0
@@ -432,28 +488,26 @@ def sync_drive_policies(db: Session, override_docs: List[Dict[str, Any]] | None 
             k for k, v in [("identificador", pcode), ("version", version), ("vigencia", effective_date), ("responsable", owner)] if not v
         ]
         if missing_fields:
-            db.add(
-                DocumentAuditAlert(
-                    drive_file_id=fid,
-                    title=item["title"],
-                    alert_type="metadato_faltante",
-                    severity="media",
-                    detail=f"Faltan metadatos en el contenido del documento: {', '.join(missing_fields)}.",
-                )
+            _upsert_alert(
+                db,
+                fid,
+                item["title"],
+                "metadato_faltante",
+                "media",
+                f"Faltan metadatos en el contenido del documento: {', '.join(missing_fields)}.",
             )
             stats["alerts"] += 1
 
         # Detectar versiones contradictorias para un mismo código de política
         if pcode and version:
             if pcode in seen_policy_versions and seen_policy_versions[pcode][0] != version:
-                db.add(
-                    DocumentAuditAlert(
-                        drive_file_id=fid,
-                        title=item["title"],
-                        alert_type="version_contradictoria",
-                        severity="alta",
-                        detail=f"Conflicto de versión para {pcode}: {seen_policy_versions[pcode][0]} vs {version}.",
-                    )
+                _upsert_alert(
+                    db,
+                    fid,
+                    item["title"],
+                    "version_contradictoria",
+                    "alta",
+                    f"Conflicto de versión para {pcode}: {seen_policy_versions[pcode][0]} vs {version}.",
                 )
                 stats["alerts"] += 1
             else:
@@ -508,14 +562,13 @@ def sync_drive_policies(db: Session, override_docs: List[Dict[str, Any]] | None 
         for idx, sec in enumerate(item["sections"]):
             clean_content, inj = _sanitize_document_text(sec["content"])
             if inj:
-                db.add(
-                    DocumentAuditAlert(
-                        drive_file_id=fid,
-                        title=item["title"],
-                        alert_type="inyeccion_detectada",
-                        severity="alta",
-                        detail=f"Se neutralizó un patrón de instrucción no autorizada en '{sec['section']}'.",
-                    )
+                _upsert_alert(
+                    db,
+                    fid,
+                    item["title"],
+                    "inyeccion_detectada",
+                    "alta",
+                    f"Se neutralizó un patrón de instrucción no autorizada en '{sec['section']}'.",
                 )
                 stats["alerts"] += 1
 
