@@ -11,6 +11,7 @@ import { requestsRouter } from './routes/requests.js';
 import { ticketsRouter } from './routes/tickets.js';
 import { documentsRouter, googleOAuthCallbackHandler, ingestionRouter } from './routes/documents.js';
 import { chatRouter } from './routes/chat.js';
+import { dashboardRouter } from './routes/dashboard.js';
 
 export function createApp() {
   const app = express();
@@ -62,6 +63,7 @@ export function createApp() {
   app.use('/api/tickets', ticketsRouter);
   app.use('/api/documents', documentsRouter);
   app.use('/api/ingestion', ingestionRouter);
+  app.use('/api/dashboard', dashboardRouter);
 
   app.use((_req, res) => {
     res.status(404).json({ detail: 'Ruta no encontrada.' });

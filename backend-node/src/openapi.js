@@ -84,5 +84,14 @@ export const openApiSpec = {
     '/api/chat/{id}/feedback': {
       post: { summary: 'Registrar retroalimentación útil/no útil sobre respuesta', responses: { 200: { description: 'Estado actualizado' } } },
     },
+    '/api/dashboard/dates': {
+      get: { summary: 'Fechas disponibles de reportes diarios (solo RRHH)', responses: { 200: { description: 'Arreglo YYYY-MM-DD' } } },
+    },
+    '/api/dashboard/report': {
+      get: { summary: 'Consultar reporte diario de RRHH por fecha (solo RRHH)', responses: { 200: { description: 'Indicadores y payload del tablero' } } },
+    },
+    '/api/dashboard/report/generate': {
+      post: { summary: 'Generar o recalcular el reporte diario de forma idempotente (solo RRHH)', responses: { 200: { description: 'Reporte generado' } } },
+    },
   },
 };
