@@ -1,0 +1,12 @@
+.env
+backend/.env
+*.db
+service-account*.json
+client_secret*.json
+token.json
+backend/token.json
+backend/.venv/
+__pycache__/
+.pytest_cache/
+frontend/node_modules/
+frontend/dist/

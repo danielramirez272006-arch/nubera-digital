@@ -1,0 +1,9 @@
+{
+  "orchestrator": { "version": "1.2.0", "file": "orchestrator_v1.md" },
+  "policy_agent": { "version": "1.2.0", "file": "policy_agent_v1.md" },
+  "employee_agent": { "version": "1.1.0", "file": "employee_agent_v1.md" },
+  "analyst_agent": { "version": "1.1.0", "file": "analyst_agent_v1.md" },
+  "ingestion_agent": { "version": "1.1.0", "file": "ingestion_agent_v1.md" },
+  "validator_agent": { "version": "1.1.0", "file": "validator_agent_v1.md" },
+  "escalation_agent": { "version": "1.1.0", "file": "escalation_agent_v1.md" }
+}
