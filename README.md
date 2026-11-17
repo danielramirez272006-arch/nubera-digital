@@ -10,10 +10,10 @@ Portal interno de Recursos Humanos para **Nubera Digital** (México), construido
 .
 ├── frontend/               # React (.jsx/.js) + Vite + React Router + Recharts
 ├── backend/                # Express (ESM) + Prisma ORM (MySQL) + Zod + LangGraph.js + node-cron
+│   ├── database/           # DDL inicial de referencia y respaldos locales
 │   ├── prisma/             # schema.prisma, migraciones versionadas y seed.js
 │   ├── src/                # agents/, services/, routes/, middleware/, db/
 │   └── tests/              # Pruebas de integración ordenadas (node --test)
-├── database/               # DDL inicial de referencia y respaldos locales
 ├── prompts/                # Prompts versionados por agente + registry.json
 ├── evaluation/
 │   ├── run_eval_45.mjs     # Evaluación aislada en JS (45 preguntas + RBAC + Drive + concurrencia + SQL)

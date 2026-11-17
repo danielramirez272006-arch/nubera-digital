@@ -2,7 +2,7 @@
 backend/.env
 backend/node_modules/
 backend/token.json
-database/backups/
+backend/database/backups/
 *.db
 service-account*.json
 client_secret*.json
