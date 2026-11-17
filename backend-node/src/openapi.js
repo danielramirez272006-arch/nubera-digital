@@ -57,5 +57,20 @@ export const openApiSpec = {
     '/api/tickets/{id}': {
       patch: { summary: 'Actualizar estado e historial de ticket (solo RRHH)', responses: { 200: { description: 'Ticket actualizado' } } },
     },
+    '/api/documents': {
+      get: { summary: 'Listar documentos de Drive indexados y alertas de auditoría (solo RRHH)', responses: { 200: { description: 'Catálogo de documentos y alertas' } } },
+    },
+    '/api/documents/{drive_file_id}/content': {
+      get: { summary: 'Consultar contenido fragmentado de un documento', responses: { 200: { description: 'Secciones y metadatos' } } },
+    },
+    '/api/documents/alerts/{id}/resolve': {
+      post: { summary: 'Marcar alerta documental como revisada (solo RRHH)', responses: { 200: { description: 'Alerta actualizada' } } },
+    },
+    '/api/ingestion/oauth/url': {
+      get: { summary: 'Generar URL OAuth 2.0 de solo lectura para Google Drive (solo RRHH)', responses: { 200: { description: 'URL de autorización' } } },
+    },
+    '/api/ingestion/sync': {
+      post: { summary: 'Sincronizar políticas, PDFs y hojas de cálculo desde Google Drive (solo RRHH)', responses: { 200: { description: 'Estadísticas de sincronización' } } },
+    },
   },
 };
