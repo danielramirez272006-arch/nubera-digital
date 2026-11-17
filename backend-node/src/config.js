@@ -4,7 +4,7 @@ import { z } from 'zod';
 const envSchema = z.object({
   APP_ENV: z.string().default('development'),
   APP_HOST: z.string().default('127.0.0.1'),
-  APP_PORT: z.coerce.number().int().positive().default(8001),
+  APP_PORT: z.coerce.number().int().positive().default(8000),
   CORS_ORIGINS: z.string().default('http://localhost:5173,http://127.0.0.1:5173'),
   DATABASE_URL: z.string().min(1, 'DATABASE_URL es obligatorio'),
   JWT_SECRET: z.string().min(16).default('nubera-digital-dev-secret-2026-cambiar-en-prod'),

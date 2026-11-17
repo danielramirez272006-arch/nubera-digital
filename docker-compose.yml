@@ -1,31 +1,35 @@
 services:
   db:
-    image: pgvector/pgvector:pg16
-    container_name: nubera_rrhh_db
+    image: mysql:8.4
+    container_name: nubera_rrhh_mysql
     environment:
-      POSTGRES_USER: nubera
-      POSTGRES_PASSWORD: nubera_secret
-      POSTGRES_DB: nubera_rrhh
+      MYSQL_ROOT_PASSWORD: nubera_root_secret
+      MYSQL_DATABASE: nubera_rrhh
+      MYSQL_USER: nubera
+      MYSQL_PASSWORD: nubera_secret
     ports:
-      - "5432:5432"
+      - "3306:3306"
     volumes:
-      - pgdata:/var/lib/postgresql/data
-      - ./database/migrations/001_initial_pgvector.sql:/docker-entrypoint-initdb.d/001_initial_pgvector.sql
+      - mysqldata:/var/lib/mysql
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U nubera -d nubera_rrhh"]
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-unubera", "-pnubera_secret"]
       interval: 5s
       timeout: 5s
-      retries: 5
+      retries: 10
 
   backend:
-    build: ./backend
-    container_name: nubera_rrhh_backend
+    build: ./backend-node
+    container_name: nubera_rrhh_backend_node
     env_file:
       - .env.example
     environment:
-      DATABASE_URL: postgresql+psycopg://nubera:nubera_secret@db:5432/nubera_rrhh
+      DATABASE_URL: mysql://nubera:nubera_secret@db:3306/nubera_rrhh
+      APP_HOST: 0.0.0.0
+      APP_PORT: 8000
     ports:
       - "8000:8000"
+    volumes:
+      - ./prompts:/app/prompts:ro
     depends_on:
       db:
         condition: service_healthy
@@ -41,4 +45,4 @@ services:
       - backend
 
 volumes:
-  pgdata:
+  mysqldata:

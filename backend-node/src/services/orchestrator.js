@@ -29,7 +29,7 @@ const POLICY_SIGNALS = [
   'puedo usarlos', 'proximo ano', 'siguiente ano', 'caducan', 'vencen',
   'anticipacion', 'cuanto tiempo antes', 'politica', 'regla', 'norma',
   'como pido', 'como solicito', 'requisitos', 'cuantos dias dan',
-  'prima vacacional', 'aguinaldo', 'vales', 'fondo de ahorro', 'imss',
+  'prima vacacional', 'prima interna', 'aguinaldo', 'vales', 'fondo de ahorro', 'imss',
   'maternidad', 'paternidad', 'matrimonio', 'fallecimiento', 'incapacidad',
   'home office', 'remoto', 'horario', 'quincena', 'pago', 'bono', 'mascotas',
   'sgmm', 'seguro', 'licencia', 'permiso', 'capacitacion', 'certificacion',

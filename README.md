@@ -1,6 +1,6 @@
 # Portal de RRHH — Nubera Digital
 
-Portal interno de Recursos Humanos para **Nubera Digital** (México), construido con **React + TypeScript + Recharts** en el frontend y **FastAPI + Pydantic + LangGraph + PostgreSQL/pgvector** en el backend.
+Portal interno de Recursos Humanos para **Nubera Digital** (México), construido íntegramente en **JavaScript puro (ES Modules)**: **React + Vite + Recharts** en el frontend y **Node.js + Express + Prisma ORM + LangGraph.js + MySQL** en el backend.
 
 ---
 
@@ -8,32 +8,31 @@ Portal interno de Recursos Humanos para **Nubera Digital** (México), construido
 
 ```text
 .
-├── frontend/               # React + TypeScript + Vite + Recharts (tipografía Inter)
-├── backend/                # API FastAPI, autenticación JWT/RBAC, 7 agentes con LangGraph
-├── database/
-│   ├── migrations/
-│   │   └── 001_initial_pgvector.sql  # Esquema PostgreSQL + pgvector
-│   └── seed_db.py          # Script reproducible de carga inicial (55 colaboradores, 3 meses)
+├── frontend/               # React (.jsx/.js) + Vite + React Router + Recharts
+├── backend-node/           # Express (ESM) + Prisma ORM (MySQL) + Zod + LangGraph.js + node-cron
+│   ├── prisma/             # schema.prisma, migraciones versionadas y seed.js
+│   ├── src/                # Rutas, middleware RBAC/auth, agentes y servicios
+│   └── tests/              # Pruebas de integración por etapa (node --test)
 ├── prompts/                # Prompts versionados por agente + registry.json
 ├── evaluation/
-│   ├── run_eval_45.py      # Evaluación automatizada de 45 preguntas + RBAC + Drive
+│   ├── run_eval_45.mjs     # Evaluación aislada en JS (45 preguntas + RBAC + Drive + concurrencia + SQL)
 │   └── EVALUATION_RESULTS.md
 ├── docs/
 │   ├── ARQUITECTURA_Y_DISENO.md
 │   └── GUION_DEMO.md
 ├── .env.example
-├── .gitignore
 ├── docker-compose.yml
 └── README.md
 ```
 
 ---
 
-## Integraciones activas y modo demostración
+## Integraciones activas
 
-- **Base de datos:** PostgreSQL + `pgvector` cuando `DATABASE_URL` apunta a PostgreSQL; en desarrollo local sin Docker usa SQLite con similitud coseno local sobre 384 dimensiones.
-- **Google Drive y Sheets:** Sincronización real con Google Drive API (PDF, Google Docs y Google Sheets) cuando `GOOGLE_DRIVE_ENABLED=true`; en modo demostración indexa 10 políticas (`RH-01` a `RH-10`) visibles desde el visor integrado del portal.
-- **Datos simulados:** 55 colaboradores, 3 meses de movimientos, incapacidades, solicitudes pendientes (>3 días destacadas), tickets, historial de chat y 10 días de reportes diarios guardados.
+- **Base de datos y ORM:** **MySQL 8** gestionado con **Prisma ORM** ([schema.prisma](file:///c:/Users/calva/taller-cli/minis%20proyecto/backend-node/prisma/schema.prisma)), migraciones versionadas, transacciones atómicas y bloqueo pesimista `FOR UPDATE` para aprobación de solicitudes.
+- **Google Drive y Sheets:** Sincronización real con Google Drive API (`googleapis`, `pdf-parse`, `xlsx`) para Google Docs, PDFs (`RH-09`) y Google Sheets con múltiples pestañas (`Pagos 2026`, `Feriados 2026`).
+- **Orquestación multiagente:** Grafo en **LangGraph.js** (`@langchain/langgraph`) con clasificación de intención, agente de políticas con embeddings de 384 dimensiones, agente de datos personales, validador (hasta 2 reintentos), agente analista y tickets de escalamiento.
+- **Programación:** Tareas automáticas con `node-cron` en `America/Mexico_City` (6:30 a. m. ingesta documental, 7:00 a. m. reporte diario).
 
 ### Credenciales de demostración
 
@@ -47,16 +46,19 @@ Portal interno de Recursos Humanos para **Nubera Digital** (México), construido
 
 ## Ejecución local
 
-### 1. Backend (FastAPI)
+### 1. Backend (Node.js + Express + Prisma)
 
 ```bash
-cd backend
-.\.venv\Scripts\uvicorn.exe app.main:app --reload --port 8000
+cd backend-node
+npm install
+npx prisma generate
+npx prisma migrate deploy
+npm start
 ```
 
-Documentación OpenAPI en `http://localhost:8000/docs`.
+Documentación OpenAPI en `http://127.0.0.1:8000/docs`.
 
-### 2. Frontend (React + TypeScript + Vite)
+### 2. Frontend (React + JavaScript + Vite)
 
 ```bash
 cd frontend
@@ -64,29 +66,24 @@ npm install
 npm run dev
 ```
 
-Portal disponible en `http://localhost:5173`.
+Portal disponible en `http://127.0.0.1:5173`.
 
-### 3. Docker Compose (PostgreSQL + pgvector)
+### 3. Docker Compose (MySQL 8 + Node + React)
 
 ```bash
 cp .env.example .env
 docker compose up --build
 ```
 
-La base de datos ejecuta automáticamente [001_initial_pgvector.sql](database/migrations/001_initial_pgvector.sql) al inicializar.
-
 ---
 
 ## Pruebas y evaluación
 
 ```bash
-# Pruebas funcionales y RBAC
-cd backend
-.\.venv\Scripts\python.exe -m pytest -v
+# Pruebas de integración del backend Node
+cd backend-node
+npm test
 
-# Evaluación de 45 preguntas (desde la raíz)
-backend\.venv\Scripts\python.exe evaluation\run_eval_45.py
+# Evaluación integral aislada (45 preguntas + ciclo Drive + SQL + RBAC)
+node evaluation/run_eval_45.mjs
 ```
-
-Resultado medido en [EVALUATION_RESULTS.md](evaluation/EVALUATION_RESULTS.md): **45/45 aciertos (100.0%)**, **latencia p90 = 34 ms**, **100.0% < 8 s**, **0 fugas de datos**.
-# nubera-digital

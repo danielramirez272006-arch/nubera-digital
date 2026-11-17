@@ -40,7 +40,7 @@ export async function retrievePolicyChunks(prisma, question, topK = 4) {
       if (tsNorm.includes(w)) tsOverlap += 1;
     }
 
-    const boosted = score + Math.min(0.12, overlap * 0.03) + Math.min(0.16, tsOverlap * 0.08);
+    const boosted = score + Math.min(0.25, overlap * 0.05) + Math.min(0.18, tsOverlap * 0.09);
     scored.push({ chunk, score: boosted });
   }
 

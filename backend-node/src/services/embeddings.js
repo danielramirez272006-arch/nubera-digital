@@ -24,6 +24,8 @@ const SYNONYM_GROUPS = {
   feriados: ['feriado', 'feriados', 'festivo', 'festivos', 'asueto', 'calendario', 'inhabil', 'oficial'],
   viaticos: ['viaticos', 'viaje', 'hospedaje', 'alimentos', 'cfdi', 'reembolso'],
   seguridad: ['seguridad', 'computo', 'equipo', 'mfa', 'cifrado', 'laptop'],
+  separacion: ['prueba', 'incorporacion', 'separacion', 'renuncia', 'preaviso', 'despido', 'indemnizacion', 'liquidacion'],
+  beneficios: ['beneficio', 'beneficios', 'seguro', 'poliza', 'cobertura', 'capacitacion', 'curso'],
 };
 
 export function normalizeText(text) {
