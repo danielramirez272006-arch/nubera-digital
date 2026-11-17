@@ -17,9 +17,9 @@ DEMO_DRIVE_POLICIES = [
             {
                 "section": "Sección 1. Días de vacaciones por antigüedad y prima vacacional",
                 "content": (
-                    "Conforme a la Ley Federal del Trabajo en México y la política RH-01 de Nubera Digital, "
+                    "Conforme a la Ley Federal del Trabajo en México (arts. 74 a 81) y la política RH-01 de Nubera Digital, "
                     "Nubera otorga 15 días laborables al primer y segundo aniversario (o el mínimo legal si es mayor: "
-                    "16 días al tercer año, 18 al cuarto, 20 al quinto y +2 cada cinco años). "
+                    "16 días al tercer año, 18 días al cuarto, 20 días al quinto y +2 días cada cinco años). "
                     "La prima vacacional interna en Nubera Digital es del 30%."
                 ),
             },
@@ -36,7 +36,8 @@ DEMO_DRIVE_POLICIES = [
                 "content": (
                     "El periodo se determina por aniversario laboral, puede abarcar dos años calendario (cruzar diciembre) "
                     "y debe programarse dentro de los 6 meses posteriores al aniversario conforme al artículo 81 de la LFT. "
-                    "Operaciones de RRHH revisa el caso cuando existen días pendientes."
+                    "Operaciones de RRHH revisa el caso cuando existen días pendientes. Las vacaciones se disfrutan y no se "
+                    "pagan en efectivo salvo en la terminación de la relación laboral."
                 ),
             },
         ],

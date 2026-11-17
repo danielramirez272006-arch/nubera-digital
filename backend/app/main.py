@@ -597,9 +597,23 @@ def decide_request(
     lr = db.query(LeaveRequest).filter(LeaveRequest.id == request_id).first()
     if not lr:
         raise HTTPException(status_code=404, detail="Solicitud no encontrada.")
+
+    prev_status = lr.status
     lr.status = payload.status
     lr.approver_notes = payload.approver_notes
     lr.resolved_at = datetime.now(timezone.utc)
+
+    # Actualizar saldo si la solicitud de vacaciones estaba pendiente (había reservado saldo)
+    if prev_status == "pendiente" and lr.request_type == "vacaciones":
+        bal = db.query(Balance).filter(Balance.employee_id == lr.employee_id).order_by(Balance.year.desc()).first()
+        if bal:
+            days = float(lr.days_count)
+            bal.pending_days = max(0.0, float(bal.pending_days) - days)
+            if payload.status == "aprobada":
+                bal.used_days = float(bal.used_days) + days
+            elif payload.status == "rechazada":
+                bal.available_days = float(bal.available_days) + days
+
     db.commit()
     db.refresh(lr)
     emp = db.query(Employee).filter(Employee.id == lr.employee_id).first()

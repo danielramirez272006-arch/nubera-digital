@@ -1,5 +1,5 @@
-"""
-Script reproducible para inicializar esquema y sembrar los datos de ejemplo en PostgreSQL o SQLite.
+r"""
+Script reproducible para inicializar esquema y sembrar los datos de ejemplo en PostgreSQL, MySQL o SQLite.
 Uso: ..\backend\.venv\Scripts\python.exe database\seed_db.py
 """
 import sys

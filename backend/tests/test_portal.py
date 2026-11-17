@@ -106,7 +106,15 @@ def test_functional_requirements():
             headers=collab_headers,
         )
         assert valid_req.status_code == 200
+        req_id = valid_req.json()["id"]
         assert valid_req.json()["status"] == "pendiente"
+
+        # Rechazar solicitud libera pending_days de vuelta a available_days
+        bal_before = client.get("/api/me/data", headers=collab_headers).json()["balances"][0]["available_days"]
+        rej = client.patch(f"/api/requests/{req_id}", json={"status": "rechazada", "approver_notes": "Prueba"}, headers=hr_headers)
+        assert rej.status_code == 200
+        bal_after = client.get("/api/me/data", headers=collab_headers).json()["balances"][0]["available_days"]
+        assert bal_after > bal_before
 
 
 def test_metadata_extraction_and_idempotent_sync():
