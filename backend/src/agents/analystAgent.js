@@ -84,7 +84,18 @@ async function buildExecutiveSummary(metrics) {
     maxTokens: 300,
   });
 
-  return llmSummary || deterministic;
+  const requiredFigures = [
+    String(absences),
+    String(disabilities),
+    String(pending),
+    String(over3),
+    String(chatVol),
+    String(over20),
+  ];
+  const figuresPreserved =
+    Boolean(llmSummary) && requiredFigures.every((fig) => llmSummary.includes(fig));
+
+  return figuresPreserved ? llmSummary : deterministic;
 }
 
 export async function generateDailyReport(prisma, targetDateInput = null) {

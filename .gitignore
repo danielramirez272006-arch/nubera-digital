@@ -2,6 +2,7 @@
 backend/.env
 backend/node_modules/
 backend/token.json
+backend/.drive_sync_state.json
 backend/database/backups/
 *.db
 service-account*.json

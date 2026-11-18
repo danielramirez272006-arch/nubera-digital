@@ -1,6 +1,6 @@
 import crypto from 'node:crypto';
 import { Annotation, END, START, StateGraph } from '@langchain/langgraph';
-import { normalizeText } from './embeddings.js';
+import { normalizeText, tokenize } from './embeddings.js';
 import { answerPolicyQuestion, MIN_RELEVANCE_SCORE, retrievePolicyChunks } from './policyAgent.js';
 import { answerEmployeeQuestion } from './employeeAgent.js';
 import { validateResponse } from './validatorAgent.js';
@@ -66,17 +66,23 @@ function detectTopic(qNorm) {
   return 'Otras consultas';
 }
 
+const AMBIGUOUS_BALANCE_PATTERNS = new Set(['vacaciones de ', 'saldo de ']);
+
 function isThirdPartyQuery(qNorm) {
   if (['system prompt', 'ignora las instrucciones', 'otorga permisos', 'revela todos los salarios'].some((k) => qNorm.includes(k))) {
     return true;
   }
-  if (THIRD_PARTY_PATTERNS.some((pat) => qNorm.includes(pat))) {
-    if (['me quedan', 'mi saldo', 'mis vacaciones', 'de vacaciones'].some((own) => qNorm.includes(own))) {
-      if (!['companero', 'companera', 'colega', 'le quedan a', 'otro ', 'otra ', 'alguien mas'].some((tp) => qNorm.includes(tp))) {
-        return false;
-      }
-    }
+  const strictMatch = THIRD_PARTY_PATTERNS.some(
+    (pat) => !AMBIGUOUS_BALANCE_PATTERNS.has(pat) && qNorm.includes(pat)
+  );
+  if (strictMatch) {
     return true;
+  }
+  if ([...AMBIGUOUS_BALANCE_PATTERNS].some((pat) => qNorm.includes(pat))) {
+    const isOwnVacation =
+      qNorm.includes('saldo de vacaciones') ||
+      ['me quedan', 'mi saldo', 'mis vacaciones', 'de vacaciones'].some((own) => qNorm.includes(own));
+    return !isOwnVacation;
   }
   return false;
 }
@@ -240,8 +246,14 @@ function buildOrchestratorGraph(prisma, currentUser) {
     ]);
 
     const toolFigures = empRes.tool_figures || [];
+    const qTokens = new Set(tokenize(effectiveQ));
+    const topChunk = matches[0]?.chunk;
+    const topTokens = topChunk
+      ? new Set(tokenize(`${topChunk.title} ${topChunk.section} ${topChunk.content}`))
+      : new Set();
+    const hasLexicalGrounding = [...qTokens].some((tok) => topTokens.has(tok));
 
-    if (matches.length > 0 && matches[0].score >= MIN_RELEVANCE_SCORE) {
+    if (matches.length > 0 && matches[0].score >= MIN_RELEVANCE_SCORE && hasLexicalGrounding) {
       const citations = [];
       const snippets = [];
       const seen = new Set();

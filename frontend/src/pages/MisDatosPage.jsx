@@ -1,8 +1,22 @@
 import React, { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Calendar, MessageSquare, RefreshCw, Plus } from 'lucide-react';
+import { Calendar, MessageSquare, RefreshCw, Plus, XCircle } from 'lucide-react';
 import { apiRequest } from '../api';
 import { formatDateTimeCdmx, normalizeArray, validateLeaveRequestInput } from '../utils/validators';
+
+const REQUEST_TYPE_LABELS = {
+  vacaciones: 'Vacaciones',
+  permiso_con_goce: 'Permiso con goce',
+  permiso_sin_goce: 'Permiso sin goce',
+  home_office: 'Home office',
+};
+
+function generateIdempotencyKey() {
+  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+    return crypto.randomUUID();
+  }
+  return `req-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+}
 
 export default function MisDatosPage() {
   const navigate = useNavigate();
@@ -16,10 +30,11 @@ export default function MisDatosPage() {
   const [reason, setReason] = useState('');
   const [formMsg, setFormMsg] = useState(null);
   const [submitting, setSubmitting] = useState(false);
-  const [idempotencyKey, setIdempotencyKey] = useState(() => crypto.randomUUID());
+  const [cancellingId, setCancellingId] = useState(null);
+  const [idempotencyKey, setIdempotencyKey] = useState(generateIdempotencyKey);
 
   function resetOperationKey() {
-    setIdempotencyKey(crypto.randomUUID());
+    setIdempotencyKey(generateIdempotencyKey());
   }
 
   async function fetchMyData() {
@@ -79,6 +94,23 @@ export default function MisDatosPage() {
     }
   }
 
+  async function handleCancelRequest(requestId) {
+    setFormMsg(null);
+    setCancellingId(requestId);
+    try {
+      await apiRequest(`/api/requests/${requestId}`, {
+        method: 'PATCH',
+        body: JSON.stringify({ status: 'cancelada' }),
+      });
+      setFormMsg({ type: 'ok', text: 'Solicitud cancelada correctamente y reserva liberada.' });
+      await fetchMyData();
+    } catch (err) {
+      setFormMsg({ type: 'err', text: err instanceof Error ? err.message : 'No se pudo cancelar la solicitud.' });
+    } finally {
+      setCancellingId(null);
+    }
+  }
+
   if (loading) {
     return <div className="card">Cargando tus datos personales...</div>;
   }
@@ -94,7 +126,9 @@ export default function MisDatosPage() {
     );
   }
 
-  const bal = data?.balances?.[0];
+  const balances = normalizeArray(data?.balances);
+  const bal = balances[0];
+  const totalAvailable = balances.reduce((sum, item) => sum + Number(item.available_days || 0), 0);
   const requests = normalizeArray(data?.recent_requests);
 
   return (
@@ -114,11 +148,21 @@ export default function MisDatosPage() {
 
       <div className="kpi-grid-4" style={{ marginBottom: 0 }}>
         <div className="card">
-          <div className="kpi-label">Saldo de vacaciones ({bal?.year})</div>
-          <div className="kpi-value" style={{ color: 'var(--accent)' }}>{bal ? `${bal.available_days} días disponibles` : '—'}</div>
+          <div className="kpi-label">
+            Saldo de vacaciones ({balances.length > 1 ? 'total vigente' : bal?.year})
+          </div>
+          <div className="kpi-value" style={{ color: 'var(--accent)' }}>
+            {bal ? `${balances.length > 1 ? totalAvailable : bal.available_days} días disponibles` : '—'}
+          </div>
           {bal && (
             <div style={{ fontSize: '0.78rem', color: 'var(--text-secondary)', marginTop: 6, lineHeight: 1.45 }}>
-              <div><strong>Asignados:</strong> {bal.entitled_days} · <strong>Disfrutados:</strong> {bal.used_days} · <strong>Pendientes (reservados):</strong> {bal.pending_days}</div>
+              <div><strong>Asignados ({bal.year}):</strong> {bal.entitled_days} · <strong>Disfrutados:</strong> {bal.used_days} · <strong>Pendientes (reservados):</strong> {bal.pending_days}</div>
+              {balances.length > 1 && (
+                <div>
+                  <strong>Desglose por periodo:</strong>{' '}
+                  {balances.map((item) => `${item.year}: ${item.available_days} disp. (${item.pending_days} res.)`).join(' · ')}
+                </div>
+              )}
               <div><strong>Periodo:</strong> {bal.period_start || '—'} al {bal.period_end || '—'}</div>
               <div><strong>Aniversario:</strong> {bal.anniversary_date || '—'} · <strong>Plazo 6 meses (RH-01):</strong> {bal.six_month_deadline || bal.expiration_date}</div>
               {bal.origin_note && <div style={{ marginTop: 2, fontStyle: 'italic' }}>{bal.origin_note}</div>}
@@ -244,23 +288,40 @@ export default function MisDatosPage() {
                 <th>Días</th>
                 <th>Estado</th>
                 <th>Motivo</th>
+                <th>Acciones</th>
               </tr>
             </thead>
             <tbody>
               {requests.length === 0 ? (
                 <tr>
-                  <td colSpan={5} style={{ textAlign: 'center', color: 'var(--text-secondary)' }}>
+                  <td colSpan={6} style={{ textAlign: 'center', color: 'var(--text-secondary)' }}>
                     No tienes solicitudes registradas.
                   </td>
                 </tr>
               ) : (
                 requests.map((r) => (
                   <tr key={r.id}>
-                    <td>{String(r.request_type).replace('_', ' ')}</td>
+                    <td>{REQUEST_TYPE_LABELS[r.request_type] || String(r.request_type).replace(/_/g, ' ')}</td>
                     <td>{r.start_date} al {r.end_date}</td>
                     <td>{r.days_count}</td>
                     <td><span className="badge badge-accent">{String(r.status).toUpperCase()}</span></td>
                     <td>{r.reason || '—'}</td>
+                    <td>
+                      {r.status === 'pendiente' ? (
+                        <button
+                          type="button"
+                          className="chip-btn"
+                          style={{ color: 'var(--danger)', borderColor: 'var(--danger-soft)' }}
+                          disabled={cancellingId === r.id}
+                          onClick={() => handleCancelRequest(r.id)}
+                        >
+                          <XCircle size={12} style={{ verticalAlign: 'middle', marginRight: 4 }} />
+                          {cancellingId === r.id ? 'Cancelando...' : 'Cancelar'}
+                        </button>
+                      ) : (
+                        '—'
+                      )}
+                    </td>
                   </tr>
                 ))
               )}

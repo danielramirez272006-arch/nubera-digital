@@ -92,9 +92,6 @@ export function createRequestsRouter(prisma = defaultPrisma, { nowFn = todayInTi
         const now = new Date();
         await prisma.idempotencyRecord.deleteMany({
           where: {
-            employeeId: req.user.id,
-            operation: IDEM_OP_CREATE,
-            idempotencyKey: idemKey,
             expiresAt: { lte: now },
           },
         });

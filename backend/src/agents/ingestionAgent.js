@@ -315,12 +315,143 @@ async function responseToBuffer(resData) {
   return Buffer.from(String(resData || ''), 'utf8');
 }
 
-export async function fetchRealDriveDocuments() {
+const SUPPORTED_MIME_TYPES = new Set([
+  'application/vnd.google-apps.document',
+  'application/vnd.google-apps.spreadsheet',
+  'application/pdf',
+]);
+
+const DRIVE_SYNC_STATE_PATH = path.resolve(process.cwd(), '.drive_sync_state.json');
+
+async function readDriveSyncState() {
+  try {
+    const raw = await fs.readFile(DRIVE_SYNC_STATE_PATH, 'utf8');
+    const parsed = JSON.parse(raw);
+    return parsed && typeof parsed === 'object' ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+async function writeDriveSyncState(state) {
+  try {
+    await fs.writeFile(DRIVE_SYNC_STATE_PATH, JSON.stringify(state, null, 2), 'utf8');
+  } catch {
+    // Ignorar error no crítico al persistir pageToken local
+  }
+}
+
+async function extractSingleDriveFile(drive, f) {
+  const fileId = f.id;
+  const filename = f.name;
+  const mime = f.mimeType;
+  const driveUrl = f.webViewLink || `https://drive.google.com/file/d/${fileId}/view`;
+
+  let rawText = '';
+  let sections = [];
+
+  if (mime === 'application/vnd.google-apps.document') {
+    const exported = await drive.files.export(
+      { fileId, mimeType: 'text/plain' },
+      { responseType: 'arraybuffer' }
+    );
+    const buf = await responseToBuffer(exported.data);
+    rawText = buf.toString('utf8');
+    sections = splitIntoSections(filename, rawText);
+  } else if (mime === 'application/vnd.google-apps.spreadsheet') {
+    const exported = await drive.files.export(
+      {
+        fileId,
+        mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      },
+      { responseType: 'arraybuffer' }
+    );
+    const buf = await responseToBuffer(exported.data);
+    sections = parseXlsxAllSheets(buf);
+    rawText = sections.map((s) => s.content).join('\n');
+  } else if (mime === 'application/pdf') {
+    const downloaded = await drive.files.get(
+      { fileId, alt: 'media' },
+      { responseType: 'arraybuffer' }
+    );
+    const buf = await responseToBuffer(downloaded.data);
+    const parsed = await pdfParse(buf);
+    rawText = parsed.text || '';
+    sections = splitIntoSections(filename, rawText);
+  }
+
+  const meta = extractDocumentMetadata(rawText, filename);
+  return {
+    drive_file_id: fileId,
+    policy_code: meta.policy_code,
+    title: meta.title,
+    mime_type: mime,
+    version: meta.version,
+    effective_date: meta.effective_date,
+    owner: meta.owner,
+    drive_url: driveUrl,
+    sections,
+  };
+}
+
+export async function fetchRealDriveDocuments({ useChanges = false } = {}) {
   const auth = await getDriveAuthClient();
   const drive = google.drive({ version: 'v3', auth });
+  const folderId = config.GOOGLE_DRIVE_FOLDER_ID;
+  const syncState = await readDriveSyncState();
+  const savedToken = syncState[folderId];
+
+  if (useChanges && savedToken) {
+    try {
+      let currentToken = savedToken;
+      let newStartPageToken = savedToken;
+      const changedFilesMap = new Map();
+      const deletedIds = new Set();
+
+      do {
+        const res = await drive.changes.list({
+          pageToken: currentToken,
+          includeRemoved: true,
+          fields:
+            'nextPageToken, newStartPageToken, changes(fileId, removed, file(id, name, mimeType, version, modifiedTime, webViewLink, parents, trashed))',
+          pageSize: 100,
+        });
+
+        for (const ch of res.data.changes || []) {
+          const fid = ch.fileId || ch.file?.id;
+          if (!fid) continue;
+          const file = ch.file;
+          const inFolder = Array.isArray(file?.parents) && file.parents.includes(folderId);
+          if (ch.removed || !file || file.trashed || !inFolder) {
+            changedFilesMap.delete(fid);
+            deletedIds.add(fid);
+          } else if (SUPPORTED_MIME_TYPES.has(file.mimeType)) {
+            deletedIds.delete(fid);
+            changedFilesMap.set(fid, file);
+          }
+        }
+
+        if (res.data.newStartPageToken) {
+          newStartPageToken = res.data.newStartPageToken;
+        }
+        currentToken = res.data.nextPageToken || undefined;
+      } while (currentToken);
+
+      syncState[folderId] = newStartPageToken;
+      await writeDriveSyncState(syncState);
+
+      const docs = [];
+      for (const f of changedFilesMap.values()) {
+        docs.push(await extractSingleDriveFile(drive, f));
+      }
+      return { mode: 'incremental', docs, deletedIds: [...deletedIds] };
+    } catch {
+      // Si el pageToken expiró (ej. 410) o falló changes.list, respaldar con listado completo
+    }
+  }
 
   const query =
-    `'${config.GOOGLE_DRIVE_FOLDER_ID}' in parents and trashed = false and ` +
+    `'${folderId}' in parents and trashed = false and ` +
     `(mimeType = 'application/vnd.google-apps.document' or ` +
     `mimeType = 'application/vnd.google-apps.spreadsheet' or ` +
     `mimeType = 'application/pdf')`;
@@ -338,61 +469,22 @@ export async function fetchRealDriveDocuments() {
     pageToken = res.data.nextPageToken || undefined;
   } while (pageToken);
 
-  const docs = [];
-  for (const f of files) {
-    const fileId = f.id;
-    const filename = f.name;
-    const mime = f.mimeType;
-    const driveUrl = f.webViewLink || `https://drive.google.com/file/d/${fileId}/view`;
-
-    let rawText = '';
-    let sections = [];
-
-    if (mime === 'application/vnd.google-apps.document') {
-      const exported = await drive.files.export(
-        { fileId, mimeType: 'text/plain' },
-        { responseType: 'arraybuffer' }
-      );
-      const buf = await responseToBuffer(exported.data);
-      rawText = buf.toString('utf8');
-      sections = splitIntoSections(filename, rawText);
-    } else if (mime === 'application/vnd.google-apps.spreadsheet') {
-      const exported = await drive.files.export(
-        {
-          fileId,
-          mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-        },
-        { responseType: 'arraybuffer' }
-      );
-      const buf = await responseToBuffer(exported.data);
-      sections = parseXlsxAllSheets(buf);
-      rawText = sections.map((s) => s.content).join('\n');
-    } else if (mime === 'application/pdf') {
-      const downloaded = await drive.files.get(
-        { fileId, alt: 'media' },
-        { responseType: 'arraybuffer' }
-      );
-      const buf = await responseToBuffer(downloaded.data);
-      const parsed = await pdfParse(buf);
-      rawText = parsed.text || '';
-      sections = splitIntoSections(filename, rawText);
+  try {
+    const startRes = await drive.changes.getStartPageToken();
+    if (startRes?.data?.startPageToken) {
+      syncState[folderId] = startRes.data.startPageToken;
+      await writeDriveSyncState(syncState);
     }
-
-    const meta = extractDocumentMetadata(rawText, filename);
-    docs.push({
-      drive_file_id: fileId,
-      policy_code: meta.policy_code,
-      title: meta.title,
-      mime_type: mime,
-      version: meta.version,
-      effective_date: meta.effective_date,
-      owner: meta.owner,
-      drive_url: driveUrl,
-      sections,
-    });
+  } catch {
+    // No crítico si el token de cambios no está disponible
   }
 
-  return docs;
+  const docs = [];
+  for (const f of files) {
+    docs.push(await extractSingleDriveFile(drive, f));
+  }
+
+  return useChanges ? { mode: 'full', docs, deletedIds: [] } : docs;
 }
 
 async function upsertAlert(prisma, driveFileId, title, alertType, severity, detail) {
@@ -458,6 +550,9 @@ export async function syncDrivePolicies(
 
   try {
     let sourceDocs = overrideDocs;
+    let syncMode = 'full';
+    let incrementalDeletedIds = [];
+
     if (!sourceDocs) {
       if (!config.GOOGLE_DRIVE_ENABLED || !config.GOOGLE_DRIVE_FOLDER_ID) {
         const activeCount = await prisma.driveDocument.count({ where: { status: 'activo' } });
@@ -465,8 +560,13 @@ export async function syncDrivePolicies(
       }
 
       try {
-        sourceDocs = await fetchRealDriveDocuments();
-        if (!sourceDocs || sourceDocs.length === 0) {
+        const activeCountBefore = await prisma.driveDocument.count({ where: { status: 'activo' } });
+        const fetched = await fetchRealDriveDocuments({ useChanges: activeCountBefore > 0 && !forceReembed });
+        syncMode = fetched.mode || 'full';
+        sourceDocs = fetched.docs || [];
+        incrementalDeletedIds = fetched.deletedIds || [];
+
+        if (syncMode === 'full' && sourceDocs.length === 0) {
           await upsertAlert(
             prisma,
             config.GOOGLE_DRIVE_FOLDER_ID,
@@ -651,7 +751,23 @@ export async function syncDrivePolicies(
       void injectionDetected;
     }
 
-    if (deleteMissing) {
+    const deletedIdSet = new Set(incrementalDeletedIds);
+    if (syncMode === 'incremental') {
+      for (const [fid, doc] of existingByDriveId.entries()) {
+        if (deletedIdSet.has(fid) && doc.status !== 'eliminado') {
+          await prisma.$transaction(async (tx) => {
+            await tx.driveDocument.update({
+              where: { id: doc.id },
+              data: { status: 'eliminado' },
+            });
+            await tx.documentChunk.deleteMany({ where: { documentId: doc.id } });
+          });
+          stats.deleted += 1;
+        } else if (!seenIds.has(fid) && !deletedIdSet.has(fid) && doc.status === 'activo') {
+          stats.unchanged += 1;
+        }
+      }
+    } else if (deleteMissing) {
       for (const [fid, doc] of existingByDriveId.entries()) {
         if (!seenIds.has(fid) && doc.status !== 'eliminado') {
           await prisma.$transaction(async (tx) => {

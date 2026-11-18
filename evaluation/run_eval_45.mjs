@@ -142,7 +142,15 @@ async function main() {
     ];
     await prodPrisma.$executeRawUnsafe('SET FOREIGN_KEY_CHECKS = 0');
     for (const tbl of tablesToCopy) {
-      await prodPrisma.$executeRawUnsafe(`INSERT INTO \`${evalDb}\`.\`${tbl}\` SELECT * FROM \`${prodDb}\`.\`${tbl}\``);
+      const cols = await prodPrisma.$queryRawUnsafe(
+        `SELECT COLUMN_NAME AS col FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ? ORDER BY ORDINAL_POSITION`,
+        evalDb,
+        tbl
+      );
+      const colList = cols.map((c) => `\`${c.col}\``).join(', ');
+      await prodPrisma.$executeRawUnsafe(
+        `INSERT INTO \`${evalDb}\`.\`${tbl}\` (${colList}) SELECT ${colList} FROM \`${prodDb}\`.\`${tbl}\``
+      );
     }
     await prodPrisma.$executeRawUnsafe('SET FOREIGN_KEY_CHECKS = 1');
 
