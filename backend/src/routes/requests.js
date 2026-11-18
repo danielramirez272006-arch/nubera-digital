@@ -5,15 +5,22 @@ import { prisma } from '../db/prisma.js';
 import { AppError, asyncHandler } from '../middleware/errorHandler.js';
 import { validateBody, validateQuery } from '../middleware/validate.js';
 import { requireAuth, requireHrRole } from '../middleware/auth.js';
-import { addDaysUtc, countBusinessDays, parseIsoDateUtc, toIsoDate } from '../services/vacationRules.js';
+import { addDaysUtc, countBusinessDays, isValidIsoDate, parseIsoDateUtc, toIsoDate } from '../services/vacationRules.js';
 import { parseCalendarFromDb, todayInTimezone } from '../services/paymentSchedule.js';
 
 export const requestsRouter = Router();
 
+const recentIdempotencyKeys = new Map();
+
+const isoDateField = z
+  .string()
+  .refine(isValidIsoDate, 'Fecha inválida o inexistente (usa formato real YYYY-MM-DD)');
+
 const createRequestSchema = z.object({
   request_type: z.enum(['vacaciones', 'permiso_con_goce', 'permiso_sin_goce', 'home_office']),
-  start_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Formato de fecha esperado: YYYY-MM-DD'),
-  end_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Formato de fecha esperado: YYYY-MM-DD'),
+  start_date: isoDateField,
+  end_date: isoDateField,
+  balance_id: z.coerce.number().int().positive().optional(),
   reason: z.string().max(500).optional().nullable(),
 });
 
@@ -34,12 +41,37 @@ requestsRouter.post(
   requireAuth,
   validateBody(createRequestSchema),
   asyncHandler(async (req, res) => {
-    const { request_type, start_date, end_date, reason } = req.validatedBody;
+    const { request_type, start_date, end_date, balance_id, reason } = req.validatedBody;
     const startDate = parseIsoDateUtc(start_date);
     const endDate = parseIsoDateUtc(end_date);
+    const idemHeader = String(req.headers['x-idempotency-key'] || '').trim();
+    const idemCacheKey = idemHeader ? `${req.user.id}:${idemHeader}` : null;
 
     if (endDate < startDate) {
       throw new AppError(400, 'La fecha de fin debe ser posterior o igual a la fecha de inicio.');
+    }
+
+    if (idemCacheKey && recentIdempotencyKeys.has(idemCacheKey)) {
+      const existingId = recentIdempotencyKeys.get(idemCacheKey);
+      const existingReq = await prisma.leaveRequest.findFirst({
+        where: { id: existingId, employeeId: req.user.id },
+      });
+      if (existingReq) {
+        return res.json({
+          id: existingReq.id,
+          balance_id: existingReq.balanceId ?? null,
+          employee_name: req.user.fullName,
+          department: req.user.department,
+          request_type: existingReq.requestType,
+          start_date: toIsoDate(existingReq.startDate),
+          end_date: toIsoDate(existingReq.endDate),
+          days_count: Number(existingReq.daysCount),
+          status: existingReq.status,
+          reason: existingReq.reason,
+          approver_notes: existingReq.approverNotes,
+          created_at: existingReq.createdAt,
+        });
+      }
     }
 
     const today = todayInTimezone();
@@ -60,22 +92,56 @@ requestsRouter.post(
     }
 
     const created = await prisma.$transaction(async (tx) => {
+      const duplicateRows = await tx.$queryRaw`
+        SELECT id, status
+        FROM leave_requests
+        WHERE employee_id = ${req.user.id}
+          AND request_type = ${request_type}
+          AND start_date = ${start_date}
+          AND end_date = ${end_date}
+          AND status IN ('pendiente', 'aprobada')
+        LIMIT 1
+        FOR UPDATE
+      `;
+      if (duplicateRows.length > 0) {
+        throw new AppError(409, 'Ya existe una solicitud activa o pendiente para esas mismas fechas y tipo.');
+      }
+
+      let linkedBalanceId = null;
       if (request_type === 'vacaciones') {
-        const balRows = await tx.$queryRaw`
-          SELECT id, pending_days, available_days
-          FROM balances
-          WHERE employee_id = ${req.user.id}
-          ORDER BY year DESC
-          LIMIT 1
-          FOR UPDATE
-        `;
+        const balRows = balance_id
+          ? await tx.$queryRaw`
+              SELECT id, entitled_days, used_days, pending_days, available_days
+              FROM balances
+              WHERE id = ${balance_id} AND employee_id = ${req.user.id}
+              LIMIT 1
+              FOR UPDATE
+            `
+          : await tx.$queryRaw`
+              SELECT id, entitled_days, used_days, pending_days, available_days
+              FROM balances
+              WHERE employee_id = ${req.user.id}
+              ORDER BY year DESC
+              LIMIT 1
+              FOR UPDATE
+            `;
         const bal = balRows[0];
-        if (!bal || Number(bal.available_days) < daysCount) {
+        if (!bal) {
+          throw new AppError(409, 'No se encontró un saldo vacacional válido para vincular a la solicitud.');
+        }
+
+        const curPending = Number(bal.pending_days);
+        const curUsed = Number(bal.used_days);
+        const curAvail = Number(bal.available_days);
+        if (curPending < 0 || curUsed < 0 || curAvail < 0) {
+          throw new AppError(409, 'Inconsistencia detectada en el saldo vacacional del colaborador.');
+        }
+        if (curAvail + 1e-6 < daysCount) {
           throw new AppError(400, 'No cuentas con suficientes días disponibles en tu saldo vacacional.');
         }
 
-        const nextPending = Number(bal.pending_days) + daysCount;
-        const nextAvail = Number(bal.available_days) - daysCount;
+        const nextPending = Math.round((curPending + daysCount) * 100) / 100;
+        const nextAvail = Math.round((curAvail - daysCount) * 100) / 100;
         await tx.balance.update({
           where: { id: bal.id },
           data: {
@@ -83,11 +149,13 @@ requestsRouter.post(
             availableDays: new Prisma.Decimal(nextAvail.toFixed(2)),
           },
         });
+        linkedBalanceId = bal.id;
       }
 
       return tx.leaveRequest.create({
         data: {
           employeeId: req.user.id,
+          balanceId: linkedBalanceId,
           requestType: request_type,
           startDate,
           endDate,
@@ -98,8 +166,14 @@ requestsRouter.post(
       });
     });
 
+    if (idemCacheKey) {
+      if (recentIdempotencyKeys.size > 1000) recentIdempotencyKeys.clear();
+      recentIdempotencyKeys.set(idemCacheKey, created.id);
+    }
+
     res.json({
       id: created.id,
+      balance_id: created.balanceId ?? null,
       employee_name: req.user.fullName,
       department: req.user.department,
       request_type: created.requestType,
@@ -138,6 +212,7 @@ requestsRouter.get(
     res.json(
       rows.map((lr) => ({
         id: lr.id,
+        balance_id: lr.balanceId ?? null,
         employee_name: lr.employee?.fullName || '',
         department: lr.employee?.department || '',
         request_type: lr.requestType,
@@ -170,7 +245,7 @@ requestsRouter.patch(
 
     const updated = await prisma.$transaction(async (tx) => {
       const locked = await tx.$queryRaw`
-        SELECT id, employee_id, request_type, days_count, status
+        SELECT id, employee_id, balance_id, request_type, days_count, status
         FROM leave_requests
         WHERE id = ${requestId}
         FOR UPDATE
@@ -196,36 +271,58 @@ requestsRouter.patch(
       }
 
       if (row.request_type === 'vacaciones') {
+        if (!row.balance_id) {
+          throw new AppError(
+            409,
+            'La solicitud de vacaciones no tiene un saldo vinculado; requiere revisión manual antes de resolverse.'
+          );
+        }
+
         const balRows = await tx.$queryRaw`
           SELECT id, used_days, pending_days, available_days
           FROM balances
-          WHERE employee_id = ${row.employee_id}
-          ORDER BY year DESC
+          WHERE id = ${row.balance_id}
           LIMIT 1
           FOR UPDATE
         `;
         const bal = balRows[0];
-        if (bal) {
-          const days = Number(row.days_count);
-          const nextPending = Math.max(0, Number(bal.pending_days) - days);
-          let nextUsed = Number(bal.used_days);
-          let nextAvail = Number(bal.available_days);
-
-          if (nextStatus === 'aprobada') {
-            nextUsed += days;
-          } else if (nextStatus === 'rechazada' || nextStatus === 'cancelada') {
-            nextAvail += days;
-          }
-
-          await tx.balance.update({
-            where: { id: bal.id },
-            data: {
-              pendingDays: new Prisma.Decimal(nextPending.toFixed(2)),
-              usedDays: new Prisma.Decimal(nextUsed.toFixed(2)),
-              availableDays: new Prisma.Decimal(nextAvail.toFixed(2)),
-            },
-          });
+        if (!bal) {
+          throw new AppError(409, 'No se encontró el saldo vinculado a esta solicitud.');
         }
+
+        const days = Number(row.days_count);
+        const curPending = Number(bal.pending_days);
+        const curUsed = Number(bal.used_days);
+        const curAvail = Number(bal.available_days);
+
+        if (curPending + 1e-6 < days) {
+          throw new AppError(
+            409,
+            'Inconsistencia de saldo: los días reservados son insuficientes para completar la operación.'
+          );
+        }
+        if (curUsed < 0 || curAvail < 0) {
+          throw new AppError(409, 'Inconsistencia de saldo: existen valores negativos previos.');
+        }
+
+        const nextPending = Math.round((curPending - days) * 100) / 100;
+        let nextUsed = curUsed;
+        let nextAvail = curAvail;
+
+        if (nextStatus === 'aprobada') {
+          nextUsed = Math.round((curUsed + days) * 100) / 100;
+        } else if (nextStatus === 'rechazada' || nextStatus === 'cancelada') {
+          nextAvail = Math.round((curAvail + days) * 100) / 100;
+        }
+
+        await tx.balance.update({
+          where: { id: bal.id },
+          data: {
+            pendingDays: new Prisma.Decimal(nextPending.toFixed(2)),
+            usedDays: new Prisma.Decimal(nextUsed.toFixed(2)),
+            availableDays: new Prisma.Decimal(nextAvail.toFixed(2)),
+          },
+        });
       }
 
       return tx.leaveRequest.update({
@@ -242,6 +339,7 @@ requestsRouter.patch(
 
     res.json({
       id: updated.id,
+      balance_id: updated.balanceId ?? null,
       employee_name: updated.employee?.fullName || '',
       department: updated.employee?.department || '',
       request_type: updated.requestType,

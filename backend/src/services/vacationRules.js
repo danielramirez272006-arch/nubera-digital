@@ -2,6 +2,29 @@ function daysInMonth(year, month1To12) {
   return new Date(Date.UTC(year, month1To12, 0)).getUTCDate();
 }
 
+export function isValidIsoDate(str) {
+  if (typeof str !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(str)) {
+    return false;
+  }
+  const [y, m, d] = str.split('-').map(Number);
+  if (!Number.isInteger(y) || !Number.isInteger(m) || !Number.isInteger(d)) {
+    return false;
+  }
+  if (m < 1 || m > 12 || d < 1 || d > daysInMonth(y, m)) {
+    return false;
+  }
+  const dt = new Date(Date.UTC(y, m - 1, d));
+  return dt.getUTCFullYear() === y && dt.getUTCMonth() === m - 1 && dt.getUTCDate() === d;
+}
+
+export function parseIsoDateUtc(str) {
+  if (!isValidIsoDate(str)) {
+    throw new Error(`Fecha inválida o inexistente: '${str}'. Se esperaba formato YYYY-MM-DD real.`);
+  }
+  const [y, m, d] = str.split('-').map(Number);
+  return new Date(Date.UTC(y, m - 1, d));
+}
+
 export function addMonthsUtc(d, months) {
   const y0 = d.getUTCFullYear();
   const m0 = d.getUTCMonth(); // 0-11
@@ -18,11 +41,6 @@ export function addDaysUtc(d, days) {
 
 export function toIsoDate(d) {
   return d.toISOString().slice(0, 10);
-}
-
-export function parseIsoDateUtc(str) {
-  const [y, m, d] = str.split('-').map(Number);
-  return new Date(Date.UTC(y, m - 1, d));
 }
 
 export function computeVacationEntitlement(hireDateInput, refDateInput) {

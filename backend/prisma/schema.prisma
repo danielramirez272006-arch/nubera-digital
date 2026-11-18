@@ -122,7 +122,8 @@ model Balance {
   expirationDate DateTime  @map("expiration_date") @db.Date
   updatedAt      DateTime? @default(now()) @updatedAt @map("updated_at") @db.DateTime(0)
 
-  employee Employee @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  employee      Employee       @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  leaveRequests LeaveRequest[]
 
   @@unique([employeeId, year], map: "uq_balance_emp_year")
   @@index([availableDays], map: "idx_balances_available")
@@ -133,6 +134,7 @@ model LeaveRequest {
   id            Int                @id @default(autoincrement())
   employeeId    Int                @map("employee_id")
   approverId    Int?               @map("approver_id")
+  balanceId     Int?               @map("balance_id")
   requestType   LeaveRequestType   @map("request_type")
   startDate     DateTime           @map("start_date") @db.Date
   endDate       DateTime           @map("end_date") @db.Date
@@ -145,9 +147,11 @@ model LeaveRequest {
 
   employee Employee  @relation("EmployeeRequests", fields: [employeeId], references: [id], onDelete: Cascade)
   approver Employee? @relation("ApproverRequests", fields: [approverId], references: [id], onDelete: SetNull)
+  balance  Balance?  @relation(fields: [balanceId], references: [id], onDelete: Restrict)
 
   @@index([employeeId, status], map: "idx_lr_emp_status")
   @@index([status, startDate, endDate], map: "idx_lr_status_dates")
+  @@index([balanceId], map: "idx_lr_balance")
   @@map("leave_requests")
 }
 
@@ -302,6 +306,7 @@ model Ticket {
   history  TicketHistory[]
 
   @@index([employeeId, status], map: "idx_tickets_emp_status")
+  @@index([assigneeId, status], map: "idx_tickets_assignee_status")
   @@index([isSensitive, status], map: "idx_tickets_sensitive")
   @@map("tickets")
 }

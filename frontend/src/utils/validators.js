@@ -23,6 +23,16 @@ export function validateChatMessage(msg) {
   };
 }
 
+export function isValidIsoDate(str) {
+  if (typeof str !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(str)) return false;
+  const [y, m, d] = str.split('-').map(Number);
+  if (m < 1 || m > 12 || d < 1) return false;
+  const maxDay = new Date(Date.UTC(y, m, 0)).getUTCDate();
+  if (d > maxDay) return false;
+  const dt = new Date(Date.UTC(y, m - 1, d));
+  return dt.getUTCFullYear() === y && dt.getUTCMonth() === m - 1 && dt.getUTCDate() === d;
+}
+
 export function validateLeaveRequestInput({ requestType, startDate, endDate }) {
   const allowed = ['vacaciones', 'permiso_con_goce', 'permiso_sin_goce', 'home_office'];
   if (!allowed.includes(requestType)) {
@@ -30,6 +40,9 @@ export function validateLeaveRequestInput({ requestType, startDate, endDate }) {
   }
   if (!startDate || !endDate) {
     return 'Debes indicar fecha de inicio y fecha de fin.';
+  }
+  if (!isValidIsoDate(startDate) || !isValidIsoDate(endDate)) {
+    return 'Fecha inválida o inexistente (usa formato real YYYY-MM-DD).';
   }
   if (endDate < startDate) {
     return 'La fecha de fin debe ser igual o posterior a la fecha de inicio.';

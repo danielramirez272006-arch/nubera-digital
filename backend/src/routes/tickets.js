@@ -16,7 +16,8 @@ const createTicketSchema = z.object({
 const updateTicketSchema = z.object({
   status: z.enum(['abierto', 'en_proceso', 'resuelto', 'cerrado']),
   notes: z.string().min(3).max(1000),
-  assigned_to: z.string().max(150).optional(),
+  assignee_id: z.coerce.number().int().positive().optional(),
+  assigned_to: z.string().min(2).max(150).optional(),
 });
 
 function serializeTicket(t) {
@@ -28,7 +29,8 @@ function serializeTicket(t) {
     topic: t.topic,
     confirmed_summary: t.confirmed_summary ?? t.confirmedSummary,
     status: t.status,
-    assigned_to: t.assignedTo,
+    assignee_id: t.assigneeId ?? null,
+    assigned_to: t.assignee?.fullName || t.assignedTo,
     is_sensitive: t.isSensitive,
     created_at: t.createdAt,
     updated_at: t.updatedAt,
@@ -51,9 +53,12 @@ ticketsRouter.post(
     const assignedToName = is_sensitive ? 'Laura Patricia Mendoza Ortega' : 'Diego Alejandro Santos Rivera';
 
     const assignee = await prisma.employee.findFirst({
-      where: { fullName: assignedToName, role: 'rrhh' },
-      select: { id: true },
+      where: { fullName: assignedToName, role: 'rrhh', status: 'activo' },
+      select: { id: true, fullName: true },
     });
+    if (!assignee) {
+      throw new AppError(409, `No se encontró un responsable activo de RRHH (${assignedToName}) para asignar el ticket.`);
+    }
 
     const created = await prisma.$transaction(async (tx) => {
       const year = new Date().getUTCFullYear();
@@ -64,11 +69,11 @@ ticketsRouter.post(
         data: {
           folio,
           employeeId: req.user.id,
-          assigneeId: assignee?.id ?? null,
+          assigneeId: assignee.id,
           topic,
           confirmedSummary: confirmed_summary,
           status: 'abierto',
-          assignedTo: assignedToName,
+          assignedTo: assignee.fullName,
           isSensitive: is_sensitive,
         },
       });
@@ -78,7 +83,7 @@ ticketsRouter.post(
           ticketId: ticket.id,
           actorName: req.user.fullName,
           action: 'Creación de ticket',
-          notes: 'Ticket creado tras confirmación explícita del colaborador desde el portal.',
+          notes: `Ticket creado y asignado a ${assignee.fullName} tras confirmación explícita del colaborador.`,
         },
       });
 
@@ -86,6 +91,7 @@ ticketsRouter.post(
         where: { id: ticket.id },
         include: {
           employee: { select: { fullName: true, department: true } },
+          assignee: { select: { id: true, fullName: true } },
           history: { orderBy: { createdAt: 'asc' } },
         },
       });
@@ -103,6 +109,7 @@ ticketsRouter.get(
       where: { employeeId: req.user.id },
       include: {
         employee: { select: { fullName: true, department: true } },
+        assignee: { select: { id: true, fullName: true } },
         history: { orderBy: { createdAt: 'asc' } },
       },
       orderBy: { createdAt: 'desc' },
@@ -121,17 +128,14 @@ ticketsRouter.get(
     const where = isDirector
       ? {}
       : {
-          OR: [
-            { isSensitive: false },
-            { assigneeId: req.user.id },
-            { assignedTo: req.user.fullName },
-          ],
+          OR: [{ isSensitive: false }, { assigneeId: req.user.id }],
         };
 
     const tickets = await prisma.ticket.findMany({
       where,
       include: {
         employee: { select: { fullName: true, department: true } },
+        assignee: { select: { id: true, fullName: true } },
         history: { orderBy: { createdAt: 'asc' } },
       },
       orderBy: { createdAt: 'desc' },
@@ -152,28 +156,66 @@ ticketsRouter.patch(
       throw new AppError(400, 'Identificador de ticket inválido.');
     }
 
-    const { status, notes, assigned_to } = req.validatedBody;
+    const { status, notes, assignee_id, assigned_to } = req.validatedBody;
     const updated = await prisma.$transaction(async (tx) => {
-      const existing = await tx.ticket.findUnique({ where: { id: ticketId } });
+      const existing = await tx.ticket.findUnique({
+        where: { id: ticketId },
+        include: { assignee: { select: { id: true, fullName: true } } },
+      });
       if (!existing) throw new AppError(404, 'Ticket no encontrado.');
 
-      if (existing.isSensitive && existing.assignedTo !== req.user.fullName && !(req.user.position || '').includes('Directora')) {
+      const isDirector = (req.user.position || '').includes('Directora');
+      if (existing.isSensitive && existing.assigneeId !== req.user.id && !isDirector) {
         throw new AppError(403, 'Acceso denegado a ticket sensible.');
+      }
+
+      let nextAssigneeId = existing.assigneeId;
+      let nextAssignedTo = existing.assignee?.fullName || existing.assignedTo;
+      let reassignedToName = null;
+
+      if (assignee_id !== undefined || assigned_to !== undefined) {
+        const target = assignee_id !== undefined
+          ? await tx.employee.findUnique({
+              where: { id: assignee_id },
+              select: { id: true, fullName: true, role: true, status: true },
+            })
+          : await tx.employee.findFirst({
+              where: { fullName: assigned_to },
+              select: { id: true, fullName: true, role: true, status: true },
+            });
+
+        if (!target || target.status !== 'activo' || target.role !== 'rrhh') {
+          throw new AppError(
+            400,
+            'El responsable asignado debe existir, estar activo y pertenecer al rol de RRHH.'
+          );
+        }
+
+        if (target.id !== existing.assigneeId) {
+          reassignedToName = target.fullName;
+        }
+        nextAssigneeId = target.id;
+        nextAssignedTo = target.fullName;
       }
 
       await tx.ticket.update({
         where: { id: ticketId },
         data: {
           status,
-          assignedTo: assigned_to || existing.assignedTo,
+          assigneeId: nextAssigneeId,
+          assignedTo: nextAssignedTo,
         },
       });
+
+      const actionLabel = reassignedToName
+        ? `Reasignación a ${reassignedToName} y actualización a ${status}`
+        : `Actualización a ${status}`;
 
       await tx.ticketHistory.create({
         data: {
           ticketId,
           actorName: req.user.fullName,
-          action: `Actualización a ${status}`,
+          action: actionLabel,
           notes,
         },
       });
@@ -182,6 +224,7 @@ ticketsRouter.patch(
         where: { id: ticketId },
         include: {
           employee: { select: { fullName: true, department: true } },
+          assignee: { select: { id: true, fullName: true } },
           history: { orderBy: { createdAt: 'asc' } },
         },
       });
