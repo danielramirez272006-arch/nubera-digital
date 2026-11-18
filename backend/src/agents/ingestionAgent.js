@@ -6,6 +6,7 @@ import pdfParse from 'pdf-parse';
 import * as XLSX from 'xlsx';
 import { config } from '../config.js';
 import { embedText } from './embeddings.js';
+import { invalidatePolicyChunkCache } from './policyAgent.js';
 
 const INJECTION_PATTERNS = [
   /ignora\s+(las\s+)?instrucciones/gi,
@@ -780,6 +781,10 @@ export async function syncDrivePolicies(
           stats.deleted += 1;
         }
       }
+    }
+
+    if (stats.added > 0 || stats.updated > 0 || stats.deleted > 0) {
+      invalidatePolicyChunkCache(prisma);
     }
 
     return stats;

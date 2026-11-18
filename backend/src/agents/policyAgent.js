@@ -4,8 +4,23 @@ import { loadPromptText } from './promptLoader.js';
 
 export const MIN_RELEVANCE_SCORE = 0.28;
 
-export async function retrievePolicyChunks(prisma, question, topK = 4) {
-  const qVec = embedText(question);
+// Caché en memoria por instancia de Prisma (aislada entre entornos/pruebas)
+const chunkCacheByPrisma = new WeakMap();
+const CHUNK_CACHE_TTL_MS = 30_000;
+
+export function invalidatePolicyChunkCache(prisma) {
+  if (prisma) {
+    chunkCacheByPrisma.delete(prisma);
+  }
+}
+
+async function getPreparedActiveChunks(prisma) {
+  const cached = chunkCacheByPrisma.get(prisma);
+  const now = Date.now();
+  if (cached && now - cached.loadedAt < CHUNK_CACHE_TTL_MS) {
+    return cached.items;
+  }
+
   const activeChunks = await prisma.documentChunk.findMany({
     where: { document: { status: 'activo' } },
     select: {
@@ -23,15 +38,27 @@ export async function retrievePolicyChunks(prisma, question, topK = 4) {
     },
   });
 
+  const items = activeChunks.map((chunk) => ({
+    chunk,
+    emb: Array.isArray(chunk.embedding) ? Float32Array.from(chunk.embedding) : new Float32Array(0),
+    cNorm: normalizeText(`${chunk.title} ${chunk.section} ${chunk.content}`),
+    bodyNorm: normalizeText(chunk.content),
+    tsNorm: normalizeText(`${chunk.title} ${chunk.section}`),
+  }));
+
+  chunkCacheByPrisma.set(prisma, { loadedAt: now, items });
+  return items;
+}
+
+export async function retrievePolicyChunks(prisma, question, topK = 4) {
+  const qVec = Float32Array.from(embedText(question));
+  const preparedChunks = await getPreparedActiveChunks(prisma);
+
   const qWords = new Set(tokenize(question).filter((w) => !w.startsWith('topic_') && w.length > 3));
   const scored = [];
 
-  for (const chunk of activeChunks) {
-    const emb = Array.isArray(chunk.embedding) ? chunk.embedding : [];
+  for (const { chunk, emb, cNorm, bodyNorm, tsNorm } of preparedChunks) {
     const score = cosineSimilarity(qVec, emb);
-    const cNorm = normalizeText(`${chunk.title} ${chunk.section} ${chunk.content}`);
-    const bodyNorm = normalizeText(chunk.content);
-    const tsNorm = normalizeText(`${chunk.title} ${chunk.section}`);
 
     let overlap = 0;
     let bodyOverlap = 0;

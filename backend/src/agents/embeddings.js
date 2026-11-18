@@ -112,7 +112,9 @@ export function embedText(text) {
 }
 
 export function cosineSimilarity(vecA, vecB) {
-  if (!Array.isArray(vecA) || !Array.isArray(vecB) || vecA.length === 0 || vecA.length !== vecB.length) {
+  const isArrA = Array.isArray(vecA) || ArrayBuffer.isView(vecA);
+  const isArrB = Array.isArray(vecB) || ArrayBuffer.isView(vecB);
+  if (!isArrA || !isArrB || vecA.length === 0 || vecA.length !== vecB.length) {
     return 0;
   }
   let dot = 0;
