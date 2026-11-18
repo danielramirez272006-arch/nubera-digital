@@ -395,6 +395,23 @@ async function extractSingleDriveFile(drive, f) {
   };
 }
 
+async function extractFilesSafely(drive, fileList) {
+  const docs = [];
+  const fileErrors = [];
+  for (const f of fileList) {
+    try {
+      docs.push(await extractSingleDriveFile(drive, f));
+    } catch (err) {
+      fileErrors.push({
+        drive_file_id: f.id || 'drive-file-error',
+        title: f.name || f.id || 'Archivo sin nombre',
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }
+  return { docs, fileErrors };
+}
+
 export async function fetchRealDriveDocuments({ useChanges = false } = {}) {
   const auth = await getDriveAuthClient();
   const drive = google.drive({ version: 'v3', auth });
@@ -441,11 +458,8 @@ export async function fetchRealDriveDocuments({ useChanges = false } = {}) {
       syncState[folderId] = newStartPageToken;
       await writeDriveSyncState(syncState);
 
-      const docs = [];
-      for (const f of changedFilesMap.values()) {
-        docs.push(await extractSingleDriveFile(drive, f));
-      }
-      return { mode: 'incremental', docs, deletedIds: [...deletedIds] };
+      const { docs, fileErrors } = await extractFilesSafely(drive, changedFilesMap.values());
+      return { mode: 'incremental', docs, deletedIds: [...deletedIds], fileErrors };
     } catch {
       // Si el pageToken expiró (ej. 410) o falló changes.list, respaldar con listado completo
     }
@@ -480,12 +494,8 @@ export async function fetchRealDriveDocuments({ useChanges = false } = {}) {
     // No crítico si el token de cambios no está disponible
   }
 
-  const docs = [];
-  for (const f of files) {
-    docs.push(await extractSingleDriveFile(drive, f));
-  }
-
-  return useChanges ? { mode: 'full', docs, deletedIds: [] } : docs;
+  const { docs, fileErrors } = await extractFilesSafely(drive, files);
+  return useChanges ? { mode: 'full', docs, deletedIds: [], fileErrors } : docs;
 }
 
 async function upsertAlert(prisma, driveFileId, title, alertType, severity, detail) {
@@ -553,6 +563,7 @@ export async function syncDrivePolicies(
     let sourceDocs = overrideDocs;
     let syncMode = 'full';
     let incrementalDeletedIds = [];
+    let fileErrors = [];
 
     if (!sourceDocs) {
       if (!config.GOOGLE_DRIVE_ENABLED || !config.GOOGLE_DRIVE_FOLDER_ID) {
@@ -566,8 +577,9 @@ export async function syncDrivePolicies(
         syncMode = fetched.mode || 'full';
         sourceDocs = fetched.docs || [];
         incrementalDeletedIds = fetched.deletedIds || [];
+        fileErrors = fetched.fileErrors || [];
 
-        if (syncMode === 'full' && sourceDocs.length === 0) {
+        if (syncMode === 'full' && sourceDocs.length === 0 && fileErrors.length === 0) {
           await upsertAlert(
             prisma,
             config.GOOGLE_DRIVE_FOLDER_ID,
@@ -596,10 +608,22 @@ export async function syncDrivePolicies(
 
     const existingList = await prisma.driveDocument.findMany();
     const existingByDriveId = new Map(existingList.map((d) => [d.driveFileId, d]));
-    const seenIds = new Set();
+    const seenIds = new Set(fileErrors.map((fe) => fe.drive_file_id));
     const seenPolicyVersions = new Map();
     const stats = { added: 0, updated: 0, deleted: 0, unchanged: 0, alerts: 0 };
     const now = new Date();
+
+    for (const fe of fileErrors) {
+      await upsertAlert(
+        prisma,
+        fe.drive_file_id,
+        fe.title,
+        'error_sincronizacion',
+        'alta',
+        `No se pudo procesar este archivo; los demás documentos continuaron sincronizándose. Detalle: ${fe.error}`
+      );
+      stats.alerts += 1;
+    }
 
     for (const item of sourceDocs) {
       const fid = item.drive_file_id;

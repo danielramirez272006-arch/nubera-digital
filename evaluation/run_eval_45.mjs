@@ -295,7 +295,9 @@ async function main() {
     const mdLines = [
       '# Resultados de Evaluación Aislada en JavaScript (45 Preguntas + RBAC + Concurrencia + Drive + SQL)',
       '',
+      `- **Fecha de ejecución:** \`${new Date().toISOString()}\` (${process.version})`,
       `- **Stack evaluado:** Node.js + Express + Prisma ORM + MySQL + LangGraph.js (\`backend/\`)`,
+      `- **Modo de evaluación:** Determinista (\`LLM_PROVIDER=none\`, \`GOOGLE_DRIVE_ENABLED=false\`)`,
       `- **Base de datos utilizada:** Base temporal aislada \`${evalDb}\` (clonada y eliminada al finalizar)`,
       `- **Aciertos:** ${passed}/45 (**${acc.toFixed(1)}%**) — Meta >= 80%`,
       `- **Consultas < 8 s:** ${under8s}/45 (**${fastPct.toFixed(1)}%**) — Meta >= 90%`,
