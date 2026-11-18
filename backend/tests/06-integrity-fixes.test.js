@@ -197,6 +197,103 @@ test('Reconciliación acumulada de saldos, cambios entre preview/apply e idempot
     } finally {
       await new Promise((resolve) => restartedServer.close(resolve));
     }
+
+    // 4. Concurrencia de idempotencia (dos peticiones simultáneas con misma clave) + aprobar/repetir/rechazar/cancelar
+    const hrTok = (
+      await apiJson(baseUrl, '/api/auth/login', {
+        method: 'POST',
+        body: { email: users.hrDirector.email, password: 'TestHr123!' },
+      })
+    ).data.access_token;
+
+    fakeToday = parseIsoDateUtc('2026-11-20');
+    const concKey = `conc-idem-${Date.now()}`;
+    const concPayload = {
+      request_type: 'vacaciones',
+      balance_id: balances.balCollab2026.id,
+      start_date: '2027-01-18',
+      end_date: '2027-01-19',
+      reason: 'Concurrencia idempotente',
+    };
+    const [c1, c2] = await Promise.all([
+      apiJson(baseUrl, '/api/requests', {
+        method: 'POST',
+        token: collabTok,
+        headers: { 'X-Idempotency-Key': concKey },
+        body: concPayload,
+      }),
+      apiJson(baseUrl, '/api/requests', {
+        method: 'POST',
+        token: collabTok,
+        headers: { 'X-Idempotency-Key': concKey },
+        body: concPayload,
+      }),
+    ]);
+    assert.equal(c1.status, 200);
+    assert.equal(c2.status, 200);
+    assert.equal(c1.data.id, c2.data.id);
+
+    // Aprobar y repetir la misma aprobación -> solo descuenta una vez
+    const app1 = await apiJson(baseUrl, `/api/requests/${c1.data.id}`, {
+      method: 'PATCH',
+      token: hrTok,
+      body: { status: 'aprobada' },
+    });
+    const app2 = await apiJson(baseUrl, `/api/requests/${c1.data.id}`, {
+      method: 'PATCH',
+      token: hrTok,
+      body: { status: 'aprobada' },
+    });
+    assert.equal(app1.status, 200);
+    assert.equal(app2.status, 200);
+
+    const balAfterApp = await prisma.balance.findUnique({ where: { id: balances.balCollab2026.id } });
+    assert.equal(Number(balAfterApp.usedDays), 4); // 2 inicial + 2 aprobados
+    assert.equal(Number(balAfterApp.pendingDays), 5); // los 3 iniciales + 2 de firstRes
+
+    // Rechazar libera reserva; Cancelar libera reserva
+    const reqRej = await apiJson(baseUrl, '/api/requests', {
+      method: 'POST',
+      token: collabTok,
+      body: { request_type: 'vacaciones', start_date: '2027-02-01', end_date: '2027-02-02' },
+    });
+    assert.equal(reqRej.status, 200);
+    const rejRes = await apiJson(baseUrl, `/api/requests/${reqRej.data.id}`, {
+      method: 'PATCH',
+      token: hrTok,
+      body: { status: 'rechazada' },
+    });
+    assert.equal(rejRes.status, 200);
+
+    const reqCan = await apiJson(baseUrl, '/api/requests', {
+      method: 'POST',
+      token: collabTok,
+      body: { request_type: 'vacaciones', start_date: '2027-02-08', end_date: '2027-02-09' },
+    });
+    assert.equal(reqCan.status, 200);
+    const canRes = await apiJson(baseUrl, `/api/requests/${reqCan.data.id}`, {
+      method: 'PATCH',
+      token: collabTok,
+      body: { status: 'cancelada' },
+    });
+    assert.equal(canRes.status, 200);
+
+    const balAfterRelease = await prisma.balance.findUnique({ where: { id: balances.balCollab2026.id } });
+    assert.equal(Number(balAfterRelease.pendingDays), 5);
+
+    // Expiración de vigencia de clave de idempotencia -> permite nueva operación al expirar
+    await prisma.idempotencyRecord.updateMany({
+      where: { idempotencyKey: concKey },
+      data: { expiresAt: new Date(Date.now() - 60_000) },
+    });
+    const afterExp = await apiJson(baseUrl, '/api/requests', {
+      method: 'POST',
+      token: collabTok,
+      headers: { 'X-Idempotency-Key': concKey },
+      body: { ...concPayload, start_date: '2027-02-15', end_date: '2027-02-16' },
+    });
+    assert.equal(afterExp.status, 200);
+    assert.notEqual(afterExp.data.id, c1.data.id);
   } finally {
     await env.cleanup();
   }
