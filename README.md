@@ -30,9 +30,10 @@ Portal interno de Recursos Humanos para **Nubera Digital** (México), construido
 
 ## Integraciones activas
 
-- **Base de datos y ORM:** **MySQL 8** gestionado con **Prisma ORM** ([schema.prisma](file:///c:/Users/calva/taller-cli/minis%20proyecto/backend/prisma/schema.prisma)), migraciones versionadas, transacciones atómicas y bloqueo pesimista `FOR UPDATE` para aprobación de solicitudes.
-- **Google Drive y Sheets:** Sincronización real con Google Drive API (`googleapis`, `pdf-parse`, `xlsx`) para Google Docs, PDFs (`RH-09`) y Google Sheets con múltiples pestañas (`Pagos 2026`, `Feriados 2026`).
-- **Orquestación multiagente:** Grafo en **LangGraph.js** (`@langchain/langgraph`) con clasificación de intención, agente de políticas con embeddings de 384 dimensiones, agente de datos personales, validador (hasta 2 reintentos), agente analista y tickets de escalamiento.
+- **Base de datos, integridad e idempotencia:** **MySQL 8** gestionado con **Prisma ORM** ([schema.prisma](backend/prisma/schema.prisma)), migraciones versionadas, transacciones atómicas con bloqueo pesimista `FOR UPDATE`, relación explícita `LeaveRequest.balanceId` y `Ticket.assigneeId`, idempotencia persistente (`X-Idempotency-Key` en `idempotency_records`) y reconciliación acumulada de saldos ([balanceReconciliation.js](backend/src/services/balanceReconciliation.js)).
+- **Google Drive y Sheets:** Sincronización incremental con Google Drive API (`drive.changes.list` con `pageToken`, respaldo `drive.files.list` y aislamiento de errores por archivo) usando `googleapis`, `pdf-parse` y `xlsx` para Google Docs, PDFs (`RH-09`) y Google Sheets con múltiples pestañas (`Pagos 2026`, `Feriados 2026`).
+- **Orquestación multiagente y RAG:** Grafo en **LangGraph.js** (`@langchain/langgraph`) con control de acceso anti-fugas, agente de políticas con embeddings de 384 dimensiones almacenados en MySQL y caché vectorial en memoria (`Float32Array` por instancia de Prisma), agente de datos personales, validador (hasta 2 reintentos), agente analista con validación numérica post-LLM y tickets de escalamiento.
+- **Portal colaborador (`Mis datos`):** Consulta de periodos de saldo vacacional, creación idempotente de solicitudes y cancelación directa de solicitudes pendientes con liberación transaccional de reserva.
 - **Programación:** Tareas automáticas con `node-cron` en `America/Mexico_City` (6:30 a. m. ingesta documental, 7:00 a. m. reporte diario).
 
 ### Credenciales de demostración
@@ -87,10 +88,26 @@ npx prisma migrate deploy
 npm run db:reconcile:preview
 npm run db:reconcile:apply
 
-# Pruebas de integración del backend Node (incluye suite aislada en base temporal)
+# Lint y pruebas de integración del backend (bases temporales aisladas por ejecución)
+npm run lint
 npm test
 
-# Evaluación integral aislada (45 preguntas + ciclo Drive + SQL + RBAC)
+# Verificación en vivo de integraciones externas
+npm run test:deepseek
+npm run test:drive
+
+# Lint, pruebas unitarias y build del frontend
+cd ../frontend
+npm run lint
+npm test
+npm run build
+
+# Evaluación integral aislada (45 preguntas + ciclo Drive + SQL + RBAC + concurrencia)
 cd ..
-node evaluation/run_eval_45.mjs
+npm run eval:45
 ```
+
+### Última verificación registrada
+- **Backend:** `7/7` pruebas aprobadas (`0` fallidas, `0` errores de lint).
+- **Frontend:** `5/5` pruebas aprobadas (`0` errores de lint, `vite build` limpio).
+- **Evaluación aislada (`eval:45`):** `45/45` (**100.0%**), `p90 = 33 ms`, `<8s = 100.0%`, `leaks = 0`, `rbac = true`, `conc = true`, `dashSql = true`.
