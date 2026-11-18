@@ -4,7 +4,18 @@ import { config } from '../config.js';
 import { prisma } from '../db/prisma.js';
 import { AppError } from './errorHandler.js';
 
-const revokedTokens = new Set();
+// Map<token, expiresAtMs> para poder purgar tokens ya expirados y evitar crecimiento indefinido
+const revokedTokens = new Map();
+
+function purgeExpiredRevokedTokens(now = Date.now()) {
+  for (const [token, expiresAt] of revokedTokens.entries()) {
+    if (expiresAt <= now) {
+      revokedTokens.delete(token);
+    }
+  }
+}
+
+setInterval(() => purgeExpiredRevokedTokens(), 15 * 60 * 1000).unref();
 
 export async function verifyPassword(plain, hash) {
   return bcrypt.compare(plain, hash);
@@ -33,7 +44,16 @@ export function createAccessToken(employee) {
 }
 
 export function revokeToken(token) {
-  if (token) revokedTokens.add(token);
+  if (!token) return;
+  const decoded = jwt.decode(token);
+  const expMs =
+    decoded && typeof decoded === 'object' && typeof decoded.exp === 'number'
+      ? decoded.exp * 1000
+      : Date.now() + config.JWT_EXPIRE_MINUTES * 60 * 1000;
+  if (revokedTokens.size >= 5000) {
+    purgeExpiredRevokedTokens();
+  }
+  revokedTokens.set(token, expMs);
 }
 
 export async function requireAuth(req, _res, next) {

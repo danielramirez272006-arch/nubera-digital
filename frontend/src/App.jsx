@@ -1,6 +1,7 @@
 import React from 'react';
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { AuthProvider, useAuth } from './AuthContext';
+import ErrorBoundary from './components/ErrorBoundary';
 import PortalLayout from './components/PortalLayout';
 import LoginPage from './pages/LoginPage';
 import ConsultasPage from './pages/ConsultasPage';
@@ -12,7 +13,7 @@ import SolicitudesPage from './pages/SolicitudesPage';
 import TicketsPage from './pages/TicketsPage';
 import DocumentosPage from './pages/DocumentosPage';
 
-function ProtectedRoute({ children }) {
+function ProtectedRoute({ children, requiredRole = null }) {
   const { user, loading } = useAuth();
   if (loading) {
     return (
@@ -23,6 +24,9 @@ function ProtectedRoute({ children }) {
   }
   if (!user) {
     return <Navigate to="/login" replace />;
+  }
+  if (requiredRole && user.role !== requiredRole) {
+    return <Navigate to={user.role === 'rrhh' ? '/dashboard' : '/consultas'} replace />;
   }
   return <PortalLayout>{children}</PortalLayout>;
 }
@@ -36,21 +40,23 @@ function DefaultRedirect() {
 
 export default function App() {
   return (
-    <AuthProvider>
-      <BrowserRouter>
-        <Routes>
-          <Route path="/login" element={<LoginPage />} />
-          <Route path="/consultas" element={<ProtectedRoute><ConsultasPage /></ProtectedRoute>} />
-          <Route path="/mis-datos" element={<ProtectedRoute><MisDatosPage /></ProtectedRoute>} />
-          <Route path="/mis-tickets" element={<ProtectedRoute><MisTicketsPage /></ProtectedRoute>} />
-          <Route path="/dashboard" element={<ProtectedRoute><DashboardPage /></ProtectedRoute>} />
-          <Route path="/reportes" element={<ProtectedRoute><ReportesPage /></ProtectedRoute>} />
-          <Route path="/solicitudes" element={<ProtectedRoute><SolicitudesPage /></ProtectedRoute>} />
-          <Route path="/tickets" element={<ProtectedRoute><TicketsPage /></ProtectedRoute>} />
-          <Route path="/documentos" element={<ProtectedRoute><DocumentosPage /></ProtectedRoute>} />
-          <Route path="*" element={<DefaultRedirect />} />
-        </Routes>
-      </BrowserRouter>
-    </AuthProvider>
+    <ErrorBoundary>
+      <AuthProvider>
+        <BrowserRouter>
+          <Routes>
+            <Route path="/login" element={<LoginPage />} />
+            <Route path="/consultas" element={<ProtectedRoute><ConsultasPage /></ProtectedRoute>} />
+            <Route path="/mis-datos" element={<ProtectedRoute><MisDatosPage /></ProtectedRoute>} />
+            <Route path="/mis-tickets" element={<ProtectedRoute><MisTicketsPage /></ProtectedRoute>} />
+            <Route path="/dashboard" element={<ProtectedRoute requiredRole="rrhh"><DashboardPage /></ProtectedRoute>} />
+            <Route path="/reportes" element={<ProtectedRoute requiredRole="rrhh"><ReportesPage /></ProtectedRoute>} />
+            <Route path="/solicitudes" element={<ProtectedRoute requiredRole="rrhh"><SolicitudesPage /></ProtectedRoute>} />
+            <Route path="/tickets" element={<ProtectedRoute requiredRole="rrhh"><TicketsPage /></ProtectedRoute>} />
+            <Route path="/documentos" element={<ProtectedRoute requiredRole="rrhh"><DocumentosPage /></ProtectedRoute>} />
+            <Route path="*" element={<DefaultRedirect />} />
+          </Routes>
+        </BrowserRouter>
+      </AuthProvider>
+    </ErrorBoundary>
   );
 }

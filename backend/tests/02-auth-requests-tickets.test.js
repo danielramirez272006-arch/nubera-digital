@@ -24,7 +24,7 @@ async function apiJson(baseUrl, path, { method = 'GET', token = null, body = und
     body: body !== undefined ? JSON.stringify(body) : undefined,
   });
   const text = await res.text();
-  let json = null;
+  let json;
   try {
     json = JSON.parse(text);
   } catch {
@@ -37,7 +37,7 @@ test('Stage 3: Auth, RBAC, /api/me/data, Requests concurrency, Tickets transacti
   const { server, baseUrl } = await startTestServer();
   const createdRequestIds = [];
   const createdTicketIds = [];
-  let anaId = null;
+  let anaId;
   let initialBalanceSnapshot = null;
 
   try {

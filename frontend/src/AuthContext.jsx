@@ -18,9 +18,9 @@ export function AuthProvider({ children }) {
       setSystemStatus(sys);
       if (me) {
         setUser(me);
-      } else {
-        clearStoredToken();
       }
+      // Nota: apiRequest ya limpia el token cuando el backend responde 401;
+      // no lo borramos ante errores transitorios de red.
       setLoading(false);
     });
   }, []);
@@ -37,6 +37,9 @@ export function AuthProvider({ children }) {
   }
 
   function logout() {
+    if (getStoredToken()) {
+      apiRequest('/api/auth/logout', { method: 'POST' }).catch(() => {});
+    }
     clearStoredToken();
     setUser(null);
   }
@@ -48,6 +51,7 @@ export function AuthProvider({ children }) {
   );
 }
 
+// eslint-disable-next-line react-refresh/only-export-components
 export function useAuth() {
   const ctx = useContext(AuthContext);
   if (!ctx) throw new Error('useAuth debe usarse dentro de AuthProvider');

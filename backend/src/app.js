@@ -1,5 +1,6 @@
 import express from 'express';
 import cors from 'cors';
+import helmet from 'helmet';
 import swaggerUi from 'swagger-ui-express';
 import { config } from './config.js';
 import { prisma } from './db/prisma.js';
@@ -15,6 +16,8 @@ import { dashboardRouter } from './routes/dashboard.js';
 
 export function createApp() {
   const app = express();
+  app.set('trust proxy', 1);
+  app.use(helmet());
 
   app.use(
     cors({
