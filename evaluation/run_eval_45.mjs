@@ -115,9 +115,9 @@ async function main() {
     await prodPrisma.$executeRawUnsafe(`DROP DATABASE IF EXISTS \`${evalDb}\``);
     await prodPrisma.$executeRawUnsafe(`CREATE DATABASE \`${evalDb}\` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci`);
 
-    // Crear esquema exacto en la base aislada desde schema.prisma
+    // Ejecutar migraciones versionadas de Prisma en la base aislada
     const npxBin = process.platform === 'win32' ? 'npx.cmd' : 'npx';
-    execFileSync(npxBin, ['prisma', 'db', 'push', '--skip-generate'], {
+    execFileSync(npxBin, ['prisma', 'migrate', 'deploy'], {
       cwd: BACKEND_DIR,
       env: { ...process.env, DATABASE_URL: evalUrl },
       stdio: 'inherit',

@@ -23,24 +23,30 @@ export async function retrievePolicyChunks(prisma, question, topK = 4) {
     },
   });
 
-  const qNorm = normalizeText(question);
-  const qWords = new Set(qNorm.split(' ').filter((w) => w.length > 3));
+  const qWords = new Set(tokenize(question).filter((w) => !w.startsWith('topic_') && w.length > 3));
   const scored = [];
 
   for (const chunk of activeChunks) {
     const emb = Array.isArray(chunk.embedding) ? chunk.embedding : [];
     const score = cosineSimilarity(qVec, emb);
     const cNorm = normalizeText(`${chunk.title} ${chunk.section} ${chunk.content}`);
+    const bodyNorm = normalizeText(chunk.content);
     const tsNorm = normalizeText(`${chunk.title} ${chunk.section}`);
 
     let overlap = 0;
+    let bodyOverlap = 0;
     let tsOverlap = 0;
     for (const w of qWords) {
       if (cNorm.includes(w)) overlap += 1;
+      if (bodyNorm.includes(w)) bodyOverlap += 1;
       if (tsNorm.includes(w)) tsOverlap += 1;
     }
 
-    const boosted = score + Math.min(0.25, overlap * 0.05) + Math.min(0.18, tsOverlap * 0.09);
+    const boosted =
+      score +
+      Math.min(0.25, overlap * 0.05) +
+      Math.min(0.24, bodyOverlap * 0.06) +
+      Math.min(0.18, tsOverlap * 0.09);
     scored.push({ chunk, score: boosted });
   }
 
@@ -49,7 +55,7 @@ export async function retrievePolicyChunks(prisma, question, topK = 4) {
 }
 
 export async function answerPolicyQuestion(prisma, question) {
-  const matches = await retrievePolicyChunks(prisma, question, 4);
+  const matches = await retrievePolicyChunks(prisma, question, 5);
   const qTokens = new Set(tokenize(question));
 
   let hasLexicalGrounding = false;
@@ -83,7 +89,7 @@ export async function answerPolicyQuestion(prisma, question) {
   const citations = [];
   const seenSections = new Set();
 
-  for (const { chunk, score } of relevant.slice(0, 3)) {
+  for (const { chunk, score } of relevant.slice(0, 4)) {
     const key = `${chunk.policyCode}::${chunk.section}`;
     if (!seenSections.has(key)) {
       seenSections.add(key);
