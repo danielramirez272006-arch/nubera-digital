@@ -2,27 +2,35 @@ import crypto from 'node:crypto';
 import jwt from 'jsonwebtoken';
 import bcrypt from 'bcryptjs';
 import { config } from '../config.js';
-import { prisma } from '../db/prisma.js';
+import { prisma as defaultPrisma } from '../db/prisma.js';
 import { AppError } from './errorHandler.js';
 
-// Caché en memoria <tokenHash, expiresAtMs> respaldada por tabla MySQL `revoked_tokens`
-const revokedTokens = new Map();
+// Caché en memoria por instancia de Prisma <db, Map<tokenHash, expiresAtMs>>
+const revokedCaches = new WeakMap();
+
+function getCache(db) {
+  if (!revokedCaches.has(db)) {
+    revokedCaches.set(db, new Map());
+  }
+  return revokedCaches.get(db);
+}
 
 function hashToken(token) {
   return crypto.createHash('sha256').update(token).digest('hex');
 }
 
-function purgeExpiredRevokedTokens(now = Date.now()) {
-  for (const [tokenHash, expiresAt] of revokedTokens.entries()) {
+function purgeExpiredRevokedTokens(cache, now = Date.now()) {
+  for (const [tokenHash, expiresAt] of cache.entries()) {
     if (expiresAt <= now) {
-      revokedTokens.delete(tokenHash);
+      cache.delete(tokenHash);
     }
   }
 }
 
 setInterval(() => {
-  purgeExpiredRevokedTokens();
-  prisma.revokedToken.deleteMany({ where: { expiresAt: { lte: new Date() } } }).catch(() => {});
+  const defaultCache = revokedCaches.get(defaultPrisma);
+  if (defaultCache) purgeExpiredRevokedTokens(defaultCache);
+  defaultPrisma.revokedToken.deleteMany({ where: { expiresAt: { lte: new Date() } } }).catch(() => {});
 }, 15 * 60 * 1000).unref();
 
 export async function verifyPassword(plain, hash) {
@@ -52,7 +60,7 @@ export function createAccessToken(employee) {
   );
 }
 
-export async function revokeToken(token) {
+export async function revokeToken(token, db = defaultPrisma) {
   if (!token) return;
   const decoded = jwt.decode(token);
   const expMs =
@@ -60,65 +68,72 @@ export async function revokeToken(token) {
       ? decoded.exp * 1000
       : Date.now() + config.JWT_EXPIRE_MINUTES * 60 * 1000;
   const tokenHash = hashToken(token);
+  const cache = getCache(db);
 
-  if (revokedTokens.size >= 5000) {
-    purgeExpiredRevokedTokens();
+  if (cache.size >= 5000) {
+    purgeExpiredRevokedTokens(cache);
   }
-  revokedTokens.set(tokenHash, expMs);
+  cache.set(tokenHash, expMs);
 
-  await prisma.revokedToken.upsert({
+  await db.revokedToken.upsert({
     where: { tokenHash },
     create: { tokenHash, expiresAt: new Date(expMs) },
     update: { expiresAt: new Date(expMs) },
   });
 }
 
-export async function requireAuth(req, _res, next) {
-  try {
-    const header = req.headers.authorization || '';
-    const token = header.startsWith('Bearer ') ? header.slice(7).trim() : '';
-    if (!token) {
-      throw new AppError(401, 'Sesión no autenticada. Inicia sesión para continuar.');
-    }
-    const tokenHash = hashToken(token);
-    if (revokedTokens.has(tokenHash)) {
-      throw new AppError(401, 'La sesión fue cerrada. Inicia sesión nuevamente.');
-    }
-    const persistedRevoked = await prisma.revokedToken.findUnique({
-      where: { tokenHash },
-      select: { expiresAt: true },
-    });
-    if (persistedRevoked) {
-      revokedTokens.set(tokenHash, persistedRevoked.expiresAt.getTime());
-      throw new AppError(401, 'La sesión fue cerrada. Inicia sesión nuevamente.');
-    }
+export function createRequireAuth(db = defaultPrisma) {
+  const cache = getCache(db);
 
-    let payload;
+  return async function requireAuthMiddleware(req, _res, next) {
     try {
-      payload = jwt.verify(token, config.JWT_SECRET, { algorithms: ['HS256'] });
-    } catch {
-      throw new AppError(401, 'Token de sesión inválido o expirado.');
-    }
+      const header = req.headers.authorization || '';
+      const token = header.startsWith('Bearer ') ? header.slice(7).trim() : '';
+      if (!token) {
+        throw new AppError(401, 'Sesión no autenticada. Inicia sesión para continuar.');
+      }
+      const tokenHash = hashToken(token);
+      if (cache.has(tokenHash)) {
+        throw new AppError(401, 'La sesión fue cerrada. Inicia sesión nuevamente.');
+      }
+      const persistedRevoked = await db.revokedToken.findUnique({
+        where: { tokenHash },
+        select: { expiresAt: true },
+      });
+      if (persistedRevoked) {
+        cache.set(tokenHash, persistedRevoked.expiresAt.getTime());
+        throw new AppError(401, 'La sesión fue cerrada. Inicia sesión nuevamente.');
+      }
 
-    const userId = Number(payload.sub);
-    if (!Number.isInteger(userId) || userId <= 0) {
-      throw new AppError(401, 'Token de sesión inválido.');
-    }
+      let payload;
+      try {
+        payload = jwt.verify(token, config.JWT_SECRET, { algorithms: ['HS256'] });
+      } catch {
+        throw new AppError(401, 'Token de sesión inválido o expirado.');
+      }
 
-    const employee = await prisma.employee.findFirst({
-      where: { id: userId, status: 'activo' },
-    });
-    if (!employee) {
-      throw new AppError(401, 'Usuario no encontrado o inactivo.');
-    }
+      const userId = Number(payload.sub);
+      if (!Number.isInteger(userId) || userId <= 0) {
+        throw new AppError(401, 'Token de sesión inválido.');
+      }
 
-    req.user = employee;
-    req.token = token;
-    next();
-  } catch (err) {
-    next(err);
-  }
+      const employee = await db.employee.findFirst({
+        where: { id: userId, status: 'activo' },
+      });
+      if (!employee) {
+        throw new AppError(401, 'Usuario no encontrado o inactivo.');
+      }
+
+      req.user = employee;
+      req.token = token;
+      next();
+    } catch (err) {
+      next(err);
+    }
+  };
 }
+
+export const requireAuth = createRequireAuth(defaultPrisma);
 
 export function requireHrRole(req, _res, next) {
   if (!req.user || req.user.role !== 'rrhh') {

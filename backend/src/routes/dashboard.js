@@ -1,13 +1,11 @@
 import { Router } from 'express';
 import { z } from 'zod';
-import { prisma } from '../db/prisma.js';
+import { prisma as defaultPrisma } from '../db/prisma.js';
 import { AppError, asyncHandler } from '../middleware/errorHandler.js';
 import { validateQuery } from '../middleware/validate.js';
-import { requireAuth, requireHrRole } from '../middleware/auth.js';
+import { createRequireAuth, requireHrRole } from '../middleware/auth.js';
 import { generateDailyReport } from '../agents/analystAgent.js';
 import { isValidIsoDate, parseIsoDateUtc, toIsoDate } from '../services/vacationRules.js';
-
-export const dashboardRouter = Router();
 
 const reportDateQuerySchema = z.object({
   report_date: z
@@ -37,7 +35,11 @@ function serializeReport(r) {
   };
 }
 
-dashboardRouter.get(
+export function createDashboardRouter(prisma = defaultPrisma) {
+  const dashboardRouter = Router();
+  const requireAuth = createRequireAuth(prisma);
+
+  dashboardRouter.get(
   '/dates',
   requireAuth,
   requireHrRole,
@@ -79,4 +81,9 @@ dashboardRouter.post(
     const report = await generateDailyReport(prisma, report_date || null);
     res.json(serializeReport(report));
   })
-);
+  );
+
+  return dashboardRouter;
+}
+
+export const dashboardRouter = createDashboardRouter(defaultPrisma);

@@ -3,18 +3,18 @@ import cors from 'cors';
 import helmet from 'helmet';
 import swaggerUi from 'swagger-ui-express';
 import { config } from './config.js';
-import { prisma } from './db/prisma.js';
+import { prisma as defaultPrisma } from './db/prisma.js';
 import { asyncHandler, errorHandler } from './middleware/errorHandler.js';
 import { openApiSpec } from './openapi.js';
-import { authRouter } from './routes/auth.js';
-import { meRouter } from './routes/me.js';
-import { requestsRouter } from './routes/requests.js';
-import { ticketsRouter } from './routes/tickets.js';
-import { documentsRouter, googleOAuthCallbackHandler, ingestionRouter } from './routes/documents.js';
-import { chatRouter } from './routes/chat.js';
-import { dashboardRouter } from './routes/dashboard.js';
+import { createAuthRouter } from './routes/auth.js';
+import { createMeRouter } from './routes/me.js';
+import { createRequestsRouter } from './routes/requests.js';
+import { createTicketsRouter } from './routes/tickets.js';
+import { createDocumentsRouters, googleOAuthCallbackHandler } from './routes/documents.js';
+import { createChatRouter } from './routes/chat.js';
+import { createDashboardRouter } from './routes/dashboard.js';
 
-export function createApp() {
+export function createApp({ prisma = defaultPrisma, nowFn } = {}) {
   const app = express();
   app.set('trust proxy', 1);
   app.use(helmet());
@@ -58,15 +58,17 @@ export function createApp() {
     })
   );
 
-  app.use('/api/auth', authRouter);
+  const { documentsRouter, ingestionRouter } = createDocumentsRouters(prisma);
+
+  app.use('/api/auth', createAuthRouter(prisma));
   app.get('/api/auth/google/callback', googleOAuthCallbackHandler);
-  app.use('/api/me', meRouter);
-  app.use('/api/chat', chatRouter);
-  app.use('/api/requests', requestsRouter);
-  app.use('/api/tickets', ticketsRouter);
+  app.use('/api/me', createMeRouter(prisma));
+  app.use('/api/chat', createChatRouter(prisma));
+  app.use('/api/requests', createRequestsRouter(prisma, { nowFn }));
+  app.use('/api/tickets', createTicketsRouter(prisma));
   app.use('/api/documents', documentsRouter);
   app.use('/api/ingestion', ingestionRouter);
-  app.use('/api/dashboard', dashboardRouter);
+  app.use('/api/dashboard', createDashboardRouter(prisma));
 
   app.use((_req, res) => {
     res.status(404).json({ detail: 'Ruta no encontrada.' });

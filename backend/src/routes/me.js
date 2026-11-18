@@ -1,14 +1,16 @@
 import { Router } from 'express';
-import { prisma } from '../db/prisma.js';
+import { prisma as defaultPrisma } from '../db/prisma.js';
 import { asyncHandler } from '../middleware/errorHandler.js';
-import { requireAuth } from '../middleware/auth.js';
+import { createRequireAuth } from '../middleware/auth.js';
 import { serializeUserSession } from './auth.js';
 import { computeVacationEntitlement, toIsoDate } from '../services/vacationRules.js';
 import { getNextPaymentInfo, todayInTimezone } from '../services/paymentSchedule.js';
 
-export const meRouter = Router();
+export function createMeRouter(prisma = defaultPrisma) {
+  const meRouter = Router();
+  const requireAuth = createRequireAuth(prisma);
 
-meRouter.get(
+  meRouter.get(
   '/data',
   requireAuth,
   asyncHandler(async (req, res) => {
@@ -92,4 +94,9 @@ meRouter.get(
       updated_at: new Date().toISOString(),
     });
   })
-);
+  );
+
+  return meRouter;
+}
+
+export const meRouter = createMeRouter(defaultPrisma);
