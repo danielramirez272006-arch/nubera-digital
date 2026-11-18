@@ -5,14 +5,14 @@ import { AppError, asyncHandler } from '../middleware/errorHandler.js';
 import { validateQuery } from '../middleware/validate.js';
 import { requireAuth, requireHrRole } from '../middleware/auth.js';
 import { generateDailyReport } from '../agents/analystAgent.js';
-import { parseIsoDateUtc, toIsoDate } from '../services/vacationRules.js';
+import { isValidIsoDate, parseIsoDateUtc, toIsoDate } from '../services/vacationRules.js';
 
 export const dashboardRouter = Router();
 
 const reportDateQuerySchema = z.object({
   report_date: z
     .string()
-    .regex(/^\d{4}-\d{2}-\d{2}$/, 'Formato de fecha esperado: YYYY-MM-DD')
+    .refine(isValidIsoDate, 'Fecha inválida o inexistente (formato esperado: YYYY-MM-DD)')
     .optional(),
 });
 

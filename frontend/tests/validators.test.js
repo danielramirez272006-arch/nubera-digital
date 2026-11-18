@@ -53,6 +53,18 @@ test('validateLeaveRequestInput valida tipo y rango de fechas', () => {
     validateLeaveRequestInput({ requestType: 'vacaciones', startDate: '2026-12-10', endDate: '2026-12-05' }),
     /igual o posterior/
   );
+  assert.match(
+    validateLeaveRequestInput({ requestType: 'vacaciones', startDate: '2027-02-31', endDate: '2027-03-02' }),
+    /Fecha inválida/
+  );
+  assert.match(
+    validateLeaveRequestInput({ requestType: 'vacaciones', startDate: '2026-13-01', endDate: '2026-13-02' }),
+    /Fecha inválida/
+  );
+  assert.equal(
+    validateLeaveRequestInput({ requestType: 'vacaciones', startDate: '2024-02-29', endDate: '2024-02-29' }),
+    null
+  );
 });
 
 test('formateadores CDMX manejan valores nulos e inválidos', () => {
