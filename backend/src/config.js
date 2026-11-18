@@ -1,13 +1,15 @@
 import 'dotenv/config';
 import { z } from 'zod';
 
+const DEV_JWT_SECRET = 'nubera-digital-dev-secret-2026-cambiar-en-prod';
+
 const envSchema = z.object({
   APP_ENV: z.string().default('development'),
   APP_HOST: z.string().default('127.0.0.1'),
   APP_PORT: z.coerce.number().int().positive().default(8000),
   CORS_ORIGINS: z.string().default('http://localhost:5173,http://127.0.0.1:5173'),
   DATABASE_URL: z.string().min(1, 'DATABASE_URL es obligatorio'),
-  JWT_SECRET: z.string().min(16).default('nubera-digital-dev-secret-2026-cambiar-en-prod'),
+  JWT_SECRET: z.string().min(16).default(DEV_JWT_SECRET),
   JWT_EXPIRE_MINUTES: z.coerce.number().int().positive().default(480),
   LLM_PROVIDER: z.enum(['none', 'deepseek', 'openai', 'gemini']).default('none'),
   LLM_MODEL: z.string().default('deepseek-chat'),
@@ -32,6 +34,14 @@ const envSchema = z.object({
   ANALYST_CRON_MINUTE: z.coerce.number().int().min(0).max(59).default(0),
   INGESTION_CRON_HOUR: z.coerce.number().int().min(0).max(23).default(6),
   INGESTION_CRON_MINUTE: z.coerce.number().int().min(0).max(59).default(30),
+}).superRefine((env, ctx) => {
+  if (env.APP_ENV === 'production' && env.JWT_SECRET === DEV_JWT_SECRET) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['JWT_SECRET'],
+      message: 'En producción (APP_ENV=production) debes configurar un JWT_SECRET propio y no usar el valor por defecto.',
+    });
+  }
 });
 
 const parsed = envSchema.parse(process.env);

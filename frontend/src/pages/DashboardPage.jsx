@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import {
   ResponsiveContainer,
   AreaChart,
@@ -26,7 +26,7 @@ export default function DashboardPage() {
   const [error, setError] = useState('');
   const [forbidden, setForbidden] = useState(false);
 
-  async function loadReport(dateStr) {
+  const loadReport = useCallback(async (dateStr) => {
     setLoading(true);
     setError('');
     try {
@@ -43,9 +43,9 @@ export default function DashboardPage() {
     } finally {
       setLoading(false);
     }
-  }
+  }, []);
 
-  function loadInitial() {
+  const loadInitial = useCallback(() => {
     if (user && user.role !== 'rrhh') {
       setForbidden(true);
       setLoading(false);
@@ -64,11 +64,11 @@ export default function DashboardPage() {
         else setError(err instanceof Error ? err.message : 'Error al cargar fechas de reportes.');
         setLoading(false);
       });
-  }
+  }, [user, loadReport]);
 
   useEffect(() => {
     loadInitial();
-  }, [user]);
+  }, [loadInitial]);
 
   async function handleRefreshToday() {
     setLoading(true);

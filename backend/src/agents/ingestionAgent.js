@@ -66,14 +66,14 @@ export function extractDocumentMetadata(rawText, filename) {
   const verMatch = cleanText.match(/Versi[oó]n\s+([0-9]+(?:\.[0-9]+)*)/i);
   const version = verMatch ? verMatch[1] : '';
 
-  const vigMatch = cleanText.match(/(?:Fecha de vigencia del caso|Fecha de vigencia|Vigencia)\s*[:\-]?\s*([^\n|]+)/i);
+  const vigMatch = cleanText.match(/(?:Fecha de vigencia del caso|Fecha de vigencia|Vigencia)\s*[:-]?\s*([^\n|]+)/i);
   let effectiveDate = vigMatch ? vigMatch[1].trim() : '';
   if (!effectiveDate) {
     const colVig = cleanText.match(/\b2026-\d{2}-\d{2}\b/);
     if (colVig) effectiveDate = colVig[0];
   }
 
-  const respMatch = cleanText.match(/Responsable\s*[:\-]?\s*([^\n|]+)/i);
+  const respMatch = cleanText.match(/Responsable\s*[:-]?\s*([^\n|]+)/i);
   let owner = respMatch ? respMatch[1].trim() : '';
 
   if (owner) {
