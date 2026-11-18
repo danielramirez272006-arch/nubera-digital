@@ -2,15 +2,33 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { Router } from 'express';
 import { config } from '../config.js';
-import { prisma } from '../db/prisma.js';
+import { prisma as defaultPrisma } from '../db/prisma.js';
 import { AppError, asyncHandler } from '../middleware/errorHandler.js';
-import { requireAuth, requireHrRole } from '../middleware/auth.js';
+import { createRequireAuth, requireHrRole } from '../middleware/auth.js';
 import { syncDrivePolicies } from '../agents/ingestionAgent.js';
 
-export const documentsRouter = Router();
-export const ingestionRouter = Router();
+async function resolveOAuthClientCredentials() {
+  let clientId = config.GOOGLE_OAUTH_CLIENT_ID;
+  let clientSecret = config.GOOGLE_OAUTH_CLIENT_SECRET;
+  if (!clientId || !clientSecret) {
+    try {
+      const raw = JSON.parse(await fs.readFile(path.resolve(config.GOOGLE_OAUTH_CLIENT_FILE), 'utf8'));
+      const cfg = raw.web || raw.installed || {};
+      clientId = clientId || cfg.client_id || '';
+      clientSecret = clientSecret || cfg.client_secret || '';
+    } catch {
+      // ignore missing file
+    }
+  }
+  return { clientId, clientSecret };
+}
 
-documentsRouter.get(
+export function createDocumentsRouters(prisma = defaultPrisma) {
+  const documentsRouter = Router();
+  const ingestionRouter = Router();
+  const requireAuth = createRequireAuth(prisma);
+
+  documentsRouter.get(
   '/',
   requireAuth,
   requireHrRole,
@@ -138,22 +156,6 @@ documentsRouter.post(
   })
 );
 
-async function resolveOAuthClientCredentials() {
-  let clientId = config.GOOGLE_OAUTH_CLIENT_ID;
-  let clientSecret = config.GOOGLE_OAUTH_CLIENT_SECRET;
-  if (!clientId || !clientSecret) {
-    try {
-      const raw = JSON.parse(await fs.readFile(path.resolve(config.GOOGLE_OAUTH_CLIENT_FILE), 'utf8'));
-      const cfg = raw.web || raw.installed || {};
-      clientId = clientId || cfg.client_id || '';
-      clientSecret = clientSecret || cfg.client_secret || '';
-    } catch {
-      // ignore missing file
-    }
-  }
-  return { clientId, clientSecret };
-}
-
 ingestionRouter.get(
   '/oauth/url',
   requireAuth,
@@ -183,7 +185,12 @@ ingestionRouter.post(
     const stats = await syncDrivePolicies(prisma);
     res.json({ status: 'ok', sync_stats: stats });
   })
-);
+  );
+
+  return { documentsRouter, ingestionRouter };
+}
+
+export const { documentsRouter, ingestionRouter } = createDocumentsRouters(defaultPrisma);
 
 export const googleOAuthCallbackHandler = asyncHandler(async (req, res) => {
   const code = String(req.query.code || '').trim();

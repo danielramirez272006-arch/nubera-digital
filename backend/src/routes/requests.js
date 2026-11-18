@@ -2,14 +2,12 @@ import crypto from 'node:crypto';
 import { Router } from 'express';
 import { Prisma } from '@prisma/client';
 import { z } from 'zod';
-import { prisma } from '../db/prisma.js';
+import { prisma as defaultPrisma } from '../db/prisma.js';
 import { AppError, asyncHandler } from '../middleware/errorHandler.js';
 import { validateBody, validateQuery } from '../middleware/validate.js';
-import { requireAuth, requireHrRole } from '../middleware/auth.js';
+import { createRequireAuth, requireHrRole } from '../middleware/auth.js';
 import { addDaysUtc, countBusinessDays, isValidIsoDate, parseIsoDateUtc, toIsoDate } from '../services/vacationRules.js';
 import { parseCalendarFromDb, todayInTimezone } from '../services/paymentSchedule.js';
-
-export const requestsRouter = Router();
 
 const IDEM_OP_CREATE = 'create_leave_request';
 const IDEM_TTL_MS = 24 * 60 * 60 * 1000;
@@ -66,41 +64,80 @@ const decideRequestSchema = z.object({
   approver_notes: z.string().max(500).optional().nullable(),
 });
 
-requestsRouter.post(
-  '/',
-  requireAuth,
-  validateBody(createRequestSchema),
-  asyncHandler(async (req, res) => {
-    const { request_type, start_date, end_date, balance_id, reason } = req.validatedBody;
-    const startDate = parseIsoDateUtc(start_date);
-    const endDate = parseIsoDateUtc(end_date);
-    const idemKey = String(req.headers['x-idempotency-key'] || '').trim();
-    if (idemKey.length > 128) {
-      throw new AppError(400, 'La clave X-Idempotency-Key excede el máximo de 128 caracteres.');
-    }
+export function createRequestsRouter(prisma = defaultPrisma, { nowFn = todayInTimezone } = {}) {
+  const requestsRouter = Router();
+  const requireAuth = createRequireAuth(prisma);
 
-    if (endDate < startDate) {
-      throw new AppError(400, 'La fecha de fin debe ser posterior o igual a la fecha de inicio.');
-    }
-
-    const today = todayInTimezone();
-    const { holidays } = await parseCalendarFromDb(prisma);
-    const daysCount = countBusinessDays(startDate, endDate, holidays);
-    if (daysCount <= 0) {
-      throw new AppError(400, 'El periodo seleccionado debe incluir al menos un día hábil.');
-    }
-
-    if (request_type === 'vacaciones') {
-      const leadDays = countBusinessDays(addDaysUtc(today, 1), startDate, holidays);
-      if (leadDays < 10) {
-        throw new AppError(
-          400,
-          'Conforme a RH-01, las vacaciones deben solicitarse con al menos 10 días hábiles de anticipación.'
-        );
+  requestsRouter.post(
+    '/',
+    requireAuth,
+    validateBody(createRequestSchema),
+    asyncHandler(async (req, res) => {
+      const { request_type, start_date, end_date, balance_id, reason } = req.validatedBody;
+      const startDate = parseIsoDateUtc(start_date);
+      const endDate = parseIsoDateUtc(end_date);
+      const idemKey = String(req.headers['x-idempotency-key'] || '').trim();
+      if (idemKey.length > 128) {
+        throw new AppError(400, 'La clave X-Idempotency-Key excede el máximo de 128 caracteres.');
       }
-    }
 
-    const requestHash = computeRequestHash({ request_type, start_date, end_date, balance_id, reason });
+      if (endDate < startDate) {
+        throw new AppError(400, 'La fecha de fin debe ser posterior o igual a la fecha de inicio.');
+      }
+
+      const requestHash = computeRequestHash({ request_type, start_date, end_date, balance_id, reason });
+
+      // Consultar idempotencia persistida ANTES de revalidar reglas de negocio (ej. 10 días hábiles)
+      if (idemKey) {
+        const now = new Date();
+        await prisma.idempotencyRecord.deleteMany({
+          where: {
+            employeeId: req.user.id,
+            operation: IDEM_OP_CREATE,
+            idempotencyKey: idemKey,
+            expiresAt: { lte: now },
+          },
+        });
+
+        const existingIdem = await prisma.idempotencyRecord.findUnique({
+          where: {
+            employeeId_operation_idempotencyKey: {
+              employeeId: req.user.id,
+              operation: IDEM_OP_CREATE,
+              idempotencyKey: idemKey,
+            },
+          },
+        });
+
+        if (existingIdem) {
+          if (existingIdem.requestHash !== requestHash) {
+            throw new AppError(
+              409,
+              'La clave de idempotencia ya fue utilizada con un contenido diferente.'
+            );
+          }
+          if (existingIdem.status === 'completada' && existingIdem.responseBody) {
+            return res.status(existingIdem.responseStatus || 200).json(existingIdem.responseBody);
+          }
+        }
+      }
+
+      const today = nowFn();
+      const { holidays } = await parseCalendarFromDb(prisma);
+      const daysCount = countBusinessDays(startDate, endDate, holidays);
+      if (daysCount <= 0) {
+        throw new AppError(400, 'El periodo seleccionado debe incluir al menos un día hábil.');
+      }
+
+      if (request_type === 'vacaciones') {
+        const leadDays = countBusinessDays(addDaysUtc(today, 1), startDate, holidays);
+        if (leadDays < 10) {
+          throw new AppError(
+            400,
+            'Conforme a RH-01, las vacaciones deben solicitarse con al menos 10 días hábiles de anticipación.'
+          );
+        }
+      }
 
     const runCreateTransaction = () =>
       prisma.$transaction(async (tx) => {
@@ -439,4 +476,9 @@ requestsRouter.patch(
       created_at: updated.createdAt,
     });
   })
-);
+  );
+
+  return requestsRouter;
+}
+
+export const requestsRouter = createRequestsRouter(defaultPrisma);

@@ -1,11 +1,9 @@
 import { Router } from 'express';
 import { z } from 'zod';
-import { prisma } from '../db/prisma.js';
+import { prisma as defaultPrisma } from '../db/prisma.js';
 import { AppError, asyncHandler } from '../middleware/errorHandler.js';
 import { validateBody } from '../middleware/validate.js';
-import { requireAuth, requireHrRole } from '../middleware/auth.js';
-
-export const ticketsRouter = Router();
+import { createRequireAuth, requireHrRole } from '../middleware/auth.js';
 
 const createTicketSchema = z.object({
   topic: z.string().min(3).max(120),
@@ -44,7 +42,11 @@ function serializeTicket(t) {
   };
 }
 
-ticketsRouter.post(
+export function createTicketsRouter(prisma = defaultPrisma) {
+  const ticketsRouter = Router();
+  const requireAuth = createRequireAuth(prisma);
+
+  ticketsRouter.post(
   '/',
   requireAuth,
   validateBody(createTicketSchema),
@@ -232,4 +234,9 @@ ticketsRouter.patch(
 
     res.json(serializeTicket(updated));
   })
-);
+  );
+
+  return ticketsRouter;
+}
+
+export const ticketsRouter = createTicketsRouter(defaultPrisma);

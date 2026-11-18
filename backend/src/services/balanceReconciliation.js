@@ -23,10 +23,10 @@ function hasCapacityForRequest(bal, req) {
 
 /**
  * Evalúa y reconstruye `leave_requests.balance_id` usando evidencia del periodo de antigüedad,
- * reservas (`pending_days`), días disfrutados (`used_days`) y movimientos (`movements`).
- * Nunca asigna un saldo de otro colaborador ni fuerza casos ambiguos.
+ * reservas acumuladas (`pending_days`), días disfrutados acumulados (`used_days`) y movimientos.
+ * Nunca asigna un saldo ajeno ni resuelve conjuntos sobre-suscritos arbitrariamente por orden de ID.
  */
-export async function reconcileRequestBalances(prisma, { apply = false } = {}) {
+export async function reconcileRequestBalances(prisma, { apply = false, expectedSnapshot = null } = {}) {
   const [requests, balances, movements] = await Promise.all([
     prisma.leaveRequest.findMany({
       include: {
@@ -43,6 +43,7 @@ export async function reconcileRequestBalances(prisma, { apply = false } = {}) {
     }),
   ]);
 
+  const balanceById = new Map(balances.map((b) => [b.id, b]));
   const balancesByEmp = new Map();
   for (const b of balances) {
     if (!balancesByEmp.has(b.employeeId)) balancesByEmp.set(b.employeeId, []);
@@ -55,20 +56,16 @@ export async function reconcileRequestBalances(prisma, { apply = false } = {}) {
     movementsByEmp.get(m.employeeId).push(m);
   }
 
-  const changes = [];
-  const ambiguousCases = [];
-
+  // Fase 1: Evaluación individual por solicitud
+  const proposals = new Map(); // requestId -> { req, proposedBalanceId, ambiguityReason }
   for (const req of requests) {
     if (req.requestType !== 'vacaciones') {
-      if (req.balanceId !== null) {
-        changes.push({
-          requestId: req.id,
-          employeeId: req.employeeId,
-          fromBalanceId: req.balanceId,
-          toBalanceId: null,
-          reason: 'Solicitud no vacacional no debe tener saldo vinculado.',
-        });
-      }
+      proposals.set(req.id, {
+        req,
+        proposedBalanceId: null,
+        ambiguityReason: req.balanceId !== null ? 'Solicitud no vacacional no debe tener saldo vinculado.' : null,
+        isNonVacationCleanup: req.balanceId !== null,
+      });
       continue;
     }
 
@@ -92,7 +89,6 @@ export async function reconcileRequestBalances(prisma, { apply = false } = {}) {
         proposedBalanceId = onlyBal.id;
       }
     } else {
-      // Múltiples saldos para el colaborador: exigir evidencia inequívoca de periodo/movimiento + capacidad
       const reqStartMs = req.startDate.getTime();
       const days = Number(req.daysCount);
 
@@ -125,7 +121,78 @@ export async function reconcileRequestBalances(prisma, { apply = false } = {}) {
       }
     }
 
-    if (ambiguityReason) {
+    if (ownershipMismatch && ambiguityReason) {
+      ambiguityReason = `Saldo actual pertenece a otro colaborador (#${req.balance.employeeId}). ${ambiguityReason}`;
+    }
+
+    proposals.set(req.id, { req, proposedBalanceId, ambiguityReason, isNonVacationCleanup: false });
+  }
+
+  // Fase 2: Validación acumulada de reservas (pendientes) y utilizados (aprobadas) por saldo
+  const pendingByBalance = new Map();
+  const usedByBalance = new Map();
+
+  for (const entry of proposals.values()) {
+    const { req, proposedBalanceId } = entry;
+    if (req.requestType !== 'vacaciones' || proposedBalanceId === null) continue;
+
+    if (req.status === 'pendiente') {
+      if (!pendingByBalance.has(proposedBalanceId)) pendingByBalance.set(proposedBalanceId, []);
+      pendingByBalance.get(proposedBalanceId).push(entry);
+    } else if (req.status === 'aprobada') {
+      if (!usedByBalance.has(proposedBalanceId)) usedByBalance.set(proposedBalanceId, []);
+      usedByBalance.get(proposedBalanceId).push(entry);
+    }
+  }
+
+  for (const [balId, entries] of pendingByBalance.entries()) {
+    const bal = balanceById.get(balId);
+    const totalPendingReq = entries.reduce((sum, e) => sum + Number(e.req.daysCount), 0);
+    const balPending = Number(bal.pendingDays);
+    if (totalPendingReq > balPending + 1e-6) {
+      const reason = `Suma de reservas pendientes (${totalPendingReq} días en ${entries.length} solicitudes) excede pending_days (${balPending}) del saldo ${bal.year} (#${balId}); requiere revisión manual.`;
+      for (const e of entries) {
+        e.proposedBalanceId = null;
+        e.ambiguityReason = reason;
+      }
+    }
+  }
+
+  for (const [balId, entries] of usedByBalance.entries()) {
+    const bal = balanceById.get(balId);
+    const totalUsedReq = entries.reduce((sum, e) => sum + Number(e.req.daysCount), 0);
+    const balUsed = Number(bal.usedDays);
+    if (totalUsedReq > balUsed + 1e-6) {
+      const reason = `Suma de días aprobados (${totalUsedReq} días en ${entries.length} solicitudes) excede used_days (${balUsed}) del saldo ${bal.year} (#${balId}); requiere revisión manual.`;
+      for (const e of entries) {
+        e.proposedBalanceId = null;
+        e.ambiguityReason = reason;
+      }
+    }
+  }
+
+  // Construir cambios finales, casos ambiguos e instantánea verificable
+  const changes = [];
+  const ambiguousCases = [];
+  const snapshot = { balances: {}, requests: {} };
+
+  for (const b of balances) {
+    snapshot.balances[b.id] = {
+      pendingDays: Number(b.pendingDays).toFixed(2),
+      usedDays: Number(b.usedDays).toFixed(2),
+      availableDays: Number(b.availableDays).toFixed(2),
+    };
+  }
+
+  for (const entry of proposals.values()) {
+    const { req, proposedBalanceId, ambiguityReason, isNonVacationCleanup } = entry;
+    snapshot.requests[req.id] = {
+      balanceId: req.balanceId ?? null,
+      status: req.status,
+      daysCount: Number(req.daysCount).toFixed(2),
+    };
+
+    if (ambiguityReason && !isNonVacationCleanup) {
       ambiguousCases.push({
         requestId: req.id,
         employeeId: req.employeeId,
@@ -134,9 +201,7 @@ export async function reconcileRequestBalances(prisma, { apply = false } = {}) {
         daysCount: Number(req.daysCount),
         status: req.status,
         currentBalanceId: req.balanceId,
-        reason: ownershipMismatch
-          ? `Saldo actual pertenece a otro colaborador (#${req.balance.employeeId}). ${ambiguityReason}`
-          : ambiguityReason,
+        reason: ambiguityReason,
       });
     }
 
@@ -154,8 +219,56 @@ export async function reconcileRequestBalances(prisma, { apply = false } = {}) {
   }
 
   let appliedCount = 0;
-  if (apply && changes.length > 0) {
+  if (apply) {
+    const verifySnap = expectedSnapshot || snapshot;
     await prisma.$transaction(async (tx) => {
+      // Re-verificar dentro de la transacción que saldos y solicitudes no cambiaron desde la vista previa
+      const balIdsToVerify = Object.keys(verifySnap.balances).map(Number);
+      if (balIdsToVerify.length > 0) {
+        const freshBalances = await tx.balance.findMany({
+          where: { id: { in: balIdsToVerify } },
+          select: { id: true, employeeId: true, pendingDays: true, usedDays: true, availableDays: true },
+        });
+        const freshMap = new Map(freshBalances.map((b) => [b.id, b]));
+        for (const bid of balIdsToVerify) {
+          const prev = verifySnap.balances[bid];
+          const cur = freshMap.get(bid);
+          if (
+            !cur ||
+            Number(cur.pendingDays).toFixed(2) !== prev.pendingDays ||
+            Number(cur.usedDays).toFixed(2) !== prev.usedDays ||
+            Number(cur.availableDays).toFixed(2) !== prev.availableDays
+          ) {
+            throw new Error(
+              `La cifra del saldo #${bid} cambió después de la vista previa. Aborta la aplicación y ejecuta una nueva revisión.`
+            );
+          }
+        }
+      }
+
+      const reqIdsToVerify = Object.keys(verifySnap.requests).map(Number);
+      if (reqIdsToVerify.length > 0) {
+        const freshReqs = await tx.leaveRequest.findMany({
+          where: { id: { in: reqIdsToVerify } },
+          select: { id: true, balanceId: true, status: true, daysCount: true },
+        });
+        const freshReqMap = new Map(freshReqs.map((r) => [r.id, r]));
+        for (const rid of reqIdsToVerify) {
+          const prev = verifySnap.requests[rid];
+          const cur = freshReqMap.get(rid);
+          if (
+            !cur ||
+            (cur.balanceId ?? null) !== prev.balanceId ||
+            cur.status !== prev.status ||
+            Number(cur.daysCount).toFixed(2) !== prev.daysCount
+          ) {
+            throw new Error(
+              `La solicitud #${rid} cambió después de la vista previa. Aborta la aplicación y ejecuta una nueva revisión.`
+            );
+          }
+        }
+      }
+
       for (const ch of changes) {
         if (ch.toBalanceId !== null) {
           const targetBal = await tx.balance.findUnique({
@@ -180,6 +293,7 @@ export async function reconcileRequestBalances(prisma, { apply = false } = {}) {
     totalChecked: requests.length,
     changes,
     ambiguousCases,
+    snapshot,
     appliedCount,
   };
 }

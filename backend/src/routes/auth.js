@@ -1,14 +1,12 @@
 import { Router } from 'express';
 import { z } from 'zod';
-import { prisma } from '../db/prisma.js';
+import { prisma as defaultPrisma } from '../db/prisma.js';
 import { AppError, asyncHandler } from '../middleware/errorHandler.js';
 import { validateBody } from '../middleware/validate.js';
 import { checkRateLimit } from '../middleware/rateLimit.js';
-import { createAccessToken, requireAuth, revokeToken, verifyPassword } from '../middleware/auth.js';
+import { createAccessToken, createRequireAuth, revokeToken, verifyPassword } from '../middleware/auth.js';
 import { toIsoDate } from '../services/vacationRules.js';
 import { getNextPaymentInfo } from '../services/paymentSchedule.js';
-
-export const authRouter = Router();
 
 const loginSchema = z.object({
   email: z.string().email('Correo corporativo inválido.'),
@@ -30,7 +28,11 @@ export function serializeUserSession(emp, overrideNextPay = null) {
   };
 }
 
-authRouter.post(
+export function createAuthRouter(prisma = defaultPrisma) {
+  const authRouter = Router();
+  const requireAuth = createRequireAuth(prisma);
+
+  authRouter.post(
   '/login',
   validateBody(loginSchema),
   asyncHandler(async (req, res) => {
@@ -67,20 +69,25 @@ authRouter.post(
   })
 );
 
-authRouter.post(
-  '/logout',
-  requireAuth,
-  asyncHandler(async (req, res) => {
-    await revokeToken(req.token);
-    res.json({ status: 'ok', message: 'Sesión cerrada correctamente.' });
-  })
-);
+  authRouter.post(
+    '/logout',
+    requireAuth,
+    asyncHandler(async (req, res) => {
+      await revokeToken(req.token, prisma);
+      res.json({ status: 'ok', message: 'Sesión cerrada correctamente.' });
+    })
+  );
 
-authRouter.get(
-  '/me',
-  requireAuth,
-  asyncHandler(async (req, res) => {
-    const payInfo = await getNextPaymentInfo(prisma);
-    res.json(serializeUserSession(req.user, payInfo.projectedDate));
-  })
-);
+  authRouter.get(
+    '/me',
+    requireAuth,
+    asyncHandler(async (req, res) => {
+      const payInfo = await getNextPaymentInfo(prisma);
+      res.json(serializeUserSession(req.user, payInfo.projectedDate));
+    })
+  );
+
+  return authRouter;
+}
+
+export const authRouter = createAuthRouter(defaultPrisma);

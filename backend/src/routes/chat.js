@@ -1,13 +1,11 @@
 import { Router } from 'express';
 import { z } from 'zod';
-import { prisma } from '../db/prisma.js';
+import { prisma as defaultPrisma } from '../db/prisma.js';
 import { AppError, asyncHandler } from '../middleware/errorHandler.js';
 import { validateBody, validateQuery } from '../middleware/validate.js';
-import { requireAuth } from '../middleware/auth.js';
+import { createRequireAuth } from '../middleware/auth.js';
 import { checkRateLimit } from '../middleware/rateLimit.js';
 import { processChatQuery } from '../agents/orchestrator.js';
-
-export const chatRouter = Router();
 
 const chatBodySchema = z.object({
   question: z.string().trim().min(1, 'Escribe un mensaje para continuar.').max(1500),
@@ -44,7 +42,11 @@ function serializeChatLog(log, suggestedSummary = null) {
   };
 }
 
-chatRouter.get(
+export function createChatRouter(prisma = defaultPrisma) {
+  const chatRouter = Router();
+  const requireAuth = createRequireAuth(prisma);
+
+  chatRouter.get(
   '/conversations',
   requireAuth,
   asyncHandler(async (req, res) => {
@@ -89,7 +91,7 @@ chatRouter.post(
   })
 );
 
-chatRouter.get(
+  chatRouter.get(
   '/history',
   requireAuth,
   validateQuery(historyQuerySchema),
@@ -135,4 +137,9 @@ chatRouter.post(
 
     res.json({ status: 'ok', id: updated.id, helpful: updated.helpful });
   })
-);
+  );
+
+  return chatRouter;
+}
+
+export const chatRouter = createChatRouter(defaultPrisma);

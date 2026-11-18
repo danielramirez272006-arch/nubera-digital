@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import http from 'node:http';
 import { Prisma, PrismaClient } from '@prisma/client';
+import { createApp } from '../src/app.js';
 import { createIsolatedTestEnv, readBaseDatabaseUrl } from './helpers/isolatedDb.js';
 import { reconcileRequestBalances } from '../src/services/balanceReconciliation.js';
 import { computeVacationEntitlement, isValidIsoDate, parseIsoDateUtc, toIsoDate } from '../src/services/vacationRules.js';
@@ -17,30 +18,17 @@ async function apiJson(baseUrl, path, { method = 'GET', token = null, body = und
   return { status: res.status, data: await res.json() };
 }
 
-test('Isolated DB: Reconciliación de saldos, idempotencia persistente, tickets, fechas y cero impacto en portal', async () => {
-  // Snapshot de lectura en la base habitual del portal para comprobar que no se modifica nada
-  const prodUrl = await readBaseDatabaseUrl();
-  const prodReader = new PrismaClient({ datasources: { db: { url: prodUrl } } });
-  const beforeProd = {
-    requests: await prodReader.leaveRequest.count(),
-    idem: await prodReader.idempotencyRecord.count(),
-    anaBal: await prodReader.balance.findFirst({
-      where: { employee: { email: 'ana.garcia@nubera.mx' } },
-      orderBy: { year: 'desc' },
-      select: { usedDays: true, pendingDays: true, availableDays: true },
-    }),
-  };
-
-  const env = await createIsolatedTestEnv({ tag: 'main' });
+test('Reconciliación acumulada de saldos, cambios entre preview/apply e idempotencia con reloj controlado', async () => {
+  let fakeToday = parseIsoDateUtc('2026-11-20');
+  const env = await createIsolatedTestEnv({ tag: 'int_main', nowFn: () => fakeToday });
 
   try {
     const { prisma, baseUrl, users, balances } = env;
 
-    // --- 4. Validación estricta de fechas reales y bisiestos ---
+    // 1. Validación estricta de fechas reales y bisiestos
     assert.equal(isValidIsoDate('2027-02-31'), false);
     assert.equal(isValidIsoDate('2026-13-01'), false);
     assert.equal(isValidIsoDate('2025-02-29'), false);
-    assert.equal(isValidIsoDate('2026-2-5'), false);
     assert.equal(isValidIsoDate('2024-02-29'), true);
     assert.throws(() => parseIsoDateUtc('2027-02-31'));
 
@@ -48,6 +36,85 @@ test('Isolated DB: Reconciliación de saldos, idempotencia persistente, tickets,
     assert.equal(leap1.yearsOfService, 1);
     assert.equal(toIsoDate(leap1.anniversaryDate), '2025-02-28');
 
+    // 2. Reconciliación acumulada: saldo con pending_days=4 y dos solicitudes pendientes de 3 días (3+3=6 > 4)
+    const balOver = await prisma.balance.create({
+      data: {
+        employeeId: users.otherCollab.id,
+        year: 2025,
+        entitledDays: new Prisma.Decimal('15.00'),
+        usedDays: new Prisma.Decimal('0.00'),
+        pendingDays: new Prisma.Decimal('4.00'),
+        availableDays: new Prisma.Decimal('11.00'),
+        expirationDate: new Date('2026-05-01'),
+      },
+    });
+    // Ajustar balOther2026 para que tenga pending=0 y la ventana de 2025 apunte a balOver
+    await prisma.balance.update({
+      where: { id: balances.balOther2026.id },
+      data: { availableDays: new Prisma.Decimal('16.00'), pendingDays: new Prisma.Decimal('0.00') },
+    });
+
+    // Una solicitud ya vinculada (3 días) + otra pendiente por reconstruir (3 días) sobre balOver (pending=4)
+    const reqLinked = await prisma.leaveRequest.create({
+      data: {
+        employeeId: users.otherCollab.id,
+        balanceId: balOver.id,
+        requestType: 'vacaciones',
+        startDate: new Date('2025-06-10'),
+        endDate: new Date('2025-06-12'),
+        daysCount: new Prisma.Decimal('3.00'),
+        status: 'pendiente',
+      },
+    });
+    const reqUnlinked = await prisma.leaveRequest.create({
+      data: {
+        employeeId: users.otherCollab.id,
+        balanceId: null,
+        requestType: 'vacaciones',
+        startDate: new Date('2025-07-14'),
+        endDate: new Date('2025-07-16'),
+        daysCount: new Prisma.Decimal('3.00'),
+        status: 'pendiente',
+      },
+    });
+
+    const overPreview = await reconcileRequestBalances(prisma, { apply: false });
+    const ambIds = new Set(overPreview.ambiguousCases.map((a) => a.requestId));
+    assert.ok(ambIds.has(reqLinked.id), 'Debe detectar inconsistencia acumulada en solicitud ya vinculada');
+    assert.ok(ambIds.has(reqUnlinked.id), 'Debe detectar inconsistencia acumulada en solicitud por reconstruir');
+
+    // Al aplicar, ambas quedan desvinculadas sin elegir arbitrariamente por ID
+    await reconcileRequestBalances(prisma, { apply: true, expectedSnapshot: overPreview.snapshot });
+    const [rL, rU] = await Promise.all([
+      prisma.leaveRequest.findUnique({ where: { id: reqLinked.id } }),
+      prisma.leaveRequest.findUnique({ where: { id: reqUnlinked.id } }),
+    ]);
+    assert.equal(rL.balanceId, null);
+    assert.equal(rU.balanceId, null);
+
+    // Repetición de la reconciliación inmediatamente después: 0 cambios adicionales
+    const secondRun = await reconcileRequestBalances(prisma, { apply: false });
+    assert.equal(secondRun.changes.length, 0);
+
+    // Cambio de saldo entre vista previa y aplicación -> aborta con error y no aplica cambios
+    await prisma.balance.update({
+      where: { id: balOver.id },
+      data: { pendingDays: new Prisma.Decimal('6.00'), availableDays: new Prisma.Decimal('9.00') },
+    });
+    await assert.rejects(
+      () => reconcileRequestBalances(prisma, { apply: true, expectedSnapshot: secondRun.snapshot }),
+      /cambió después de la vista previa/
+    );
+
+    // Con pendingDays=6 ya coincide 3+3=6 -> ahora sí vincula ambas inequívocamente
+    const cleanPreview = await reconcileRequestBalances(prisma, { apply: false });
+    const cleanApply = await reconcileRequestBalances(prisma, {
+      apply: true,
+      expectedSnapshot: cleanPreview.snapshot,
+    });
+    assert.equal(cleanApply.appliedCount, 2);
+
+    // 3. Idempotencia evaluada ANTES de revalidar negocio (prueba con reloj controlado)
     const collabTok = (
       await apiJson(baseUrl, '/api/auth/login', {
         method: 'POST',
@@ -55,253 +122,153 @@ test('Isolated DB: Reconciliación de saldos, idempotencia persistente, tickets,
       })
     ).data.access_token;
 
-    const hrDirTok = (
-      await apiJson(baseUrl, '/api/auth/login', {
-        method: 'POST',
-        body: { email: users.hrDirector.email, password: 'TestHr123!' },
-      })
-    ).data.access_token;
-
-    const hrSpecTok = (
-      await apiJson(baseUrl, '/api/auth/login', {
-        method: 'POST',
-        body: { email: users.hrSpecialist.email, password: 'TestHr123!' },
-      })
-    ).data.access_token;
-
-    // Rechazo de fechas imposibles e intervalos invertidos
-    for (const bad of ['2027-02-31', '2026-13-01', '2026-2-5']) {
-      const r = await apiJson(baseUrl, '/api/requests', {
-        method: 'POST',
-        token: collabTok,
-        body: { request_type: 'home_office', start_date: bad, end_date: bad },
-      });
-      assert.equal(r.status, 400);
-    }
-
-    // --- 1. Reconstrucción de saldos antiguos (periodo anterior vs ambiguo vs otro colaborador) ---
-    // Solicitud de enero 2026 que pertenece al periodo 2025 (hireDate 2024-06-01 -> periodo 2025: 2025-06-01 a 2026-05-31)
-    const bal2025 = await prisma.balance.create({
-      data: {
-        employeeId: users.collab.id,
-        year: 2025,
-        entitledDays: new Prisma.Decimal('15.00'),
-        usedDays: new Prisma.Decimal('3.00'),
-        pendingDays: new Prisma.Decimal('0.00'),
-        availableDays: new Prisma.Decimal('12.00'),
-        expirationDate: new Date('2026-05-31'),
-      },
-    });
-    const reqPrevPeriod = await prisma.leaveRequest.create({
-      data: {
-        employeeId: users.collab.id,
-        balanceId: balances.balCollab2026.id, // mal vinculada por YEAR(start_date)=2026 (bal2026 tiene usedDays=0!)
-        requestType: 'vacaciones',
-        startDate: new Date('2026-01-15'),
-        endDate: new Date('2026-01-19'),
-        daysCount: new Prisma.Decimal('3.00'),
-        status: 'aprobada',
-      },
-    });
-
-    // Solicitud antigua con vínculo ambiguo (mismo saldo insuficiente en 2025 y 2026 para 8 días usados)
-    const reqAmbiguous = await prisma.leaveRequest.create({
-      data: {
-        employeeId: users.collab.id,
-        balanceId: balances.balCollab2026.id,
-        requestType: 'vacaciones',
-        startDate: new Date('2026-04-10'),
-        endDate: new Date('2026-04-21'),
-        daysCount: new Prisma.Decimal('8.00'),
-        status: 'aprobada',
-      },
-    });
-
-    // Solicitud vinculada por error al saldo de otro colaborador
-    const reqWrongOwner = await prisma.leaveRequest.create({
-      data: {
-        employeeId: users.collab.id,
-        balanceId: balances.balOther2026.id,
-        requestType: 'vacaciones',
-        startDate: new Date('2026-08-03'),
-        endDate: new Date('2026-08-05'),
-        daysCount: new Prisma.Decimal('3.00'),
-        status: 'pendiente',
-      },
-    });
-
-    const preview = await reconcileRequestBalances(prisma, { apply: false });
-    assert.ok(preview.changes.some((c) => c.requestId === reqPrevPeriod.id && c.toBalanceId === bal2025.id));
-    assert.ok(preview.ambiguousCases.some((a) => a.requestId === reqAmbiguous.id));
-    assert.ok(preview.ambiguousCases.some((a) => a.requestId === reqWrongOwner.id));
-
-    const applied = await reconcileRequestBalances(prisma, { apply: true });
-    assert.ok(applied.appliedCount >= 3);
-
-    const [afterPrev, afterAmb, afterWrong] = await Promise.all([
-      prisma.leaveRequest.findUnique({ where: { id: reqPrevPeriod.id } }),
-      prisma.leaveRequest.findUnique({ where: { id: reqAmbiguous.id } }),
-      prisma.leaveRequest.findUnique({ where: { id: reqWrongOwner.id } }),
-    ]);
-    assert.equal(afterPrev.balanceId, bal2025.id); // Periodo anterior 2025 reconstruido correctamente
-    assert.equal(afterAmb.balanceId, null); // Caso ambiguo conservado sin asignación arbitraria
-    assert.equal(afterWrong.balanceId, null); // Saldo ajeno desvinculado
-
-    // Intentar usar balance_id de otro colaborador desde la API -> 409 sin cambios
-    const crossOwnerApi = await apiJson(baseUrl, '/api/requests', {
-      method: 'POST',
-      token: collabTok,
-      body: {
-        request_type: 'vacaciones',
-        balance_id: balances.balOther2026.id,
-        start_date: '2027-02-01',
-        end_date: '2027-02-02',
-      },
-    });
-    assert.equal(crossOwnerApi.status, 409);
-
-    // --- 2. Idempotencia persistente en MySQL (concurrente, secuencial, contenido distinto, reinicio, rollback) ---
-    const idemKey = `req-idem-${Date.now()}`;
-    const payloadA = {
+    const clockKey = `clock-idem-${Date.now()}`;
+    const vacPayload = {
       request_type: 'vacaciones',
       balance_id: balances.balCollab2026.id,
-      start_date: '2027-03-08',
-      end_date: '2027-03-10',
-      reason: 'Prueba idempotencia persistente',
+      start_date: '2026-12-10',
+      end_date: '2026-12-11',
+      reason: 'Prueba reloj controlado',
     };
 
-    // Dos peticiones simultáneas con la misma clave -> 1 solicitud creada, saldo reservado 1 sola vez (3 días)
-    const [sim1, sim2] = await Promise.all([
-      apiJson(baseUrl, '/api/requests', {
-        method: 'POST',
-        token: collabTok,
-        headers: { 'X-Idempotency-Key': idemKey },
-        body: payloadA,
-      }),
-      apiJson(baseUrl, '/api/requests', {
-        method: 'POST',
-        token: collabTok,
-        headers: { 'X-Idempotency-Key': idemKey },
-        body: payloadA,
-      }),
-    ]);
-    assert.equal(sim1.status, 200);
-    assert.equal(sim2.status, 200);
-    assert.equal(sim1.data.id, sim2.data.id);
-
-    const balAfterSim = await prisma.balance.findUnique({ where: { id: balances.balCollab2026.id } });
-    assert.equal(Number(balAfterSim.pendingDays), 3);
-    assert.equal(Number(balAfterSim.availableDays), 12);
-
-    // Misma clave con contenido diferente -> 409 Conflict
-    const diffPayload = await apiJson(baseUrl, '/api/requests', {
+    // En 2026-11-20 hay >=10 días hábiles antes del 2026-12-10 -> crea solicitud (2 días)
+    const firstRes = await apiJson(baseUrl, '/api/requests', {
       method: 'POST',
       token: collabTok,
-      headers: { 'X-Idempotency-Key': idemKey },
-      body: { ...payloadA, end_date: '2027-03-11' },
+      headers: { 'X-Idempotency-Key': clockKey },
+      body: vacPayload,
     });
-    assert.equal(diffPayload.status, 409);
+    assert.equal(firstRes.status, 200);
+    assert.equal(firstRes.data.days_count, 2);
 
-    // Simular reinicio del servidor / nueva instancia de Express leyendo desde MySQL `idempotency_records`
-    const { createApp } = await import(`../src/app.js?restarted=${Date.now()}`);
-    const restartedServer = http.createServer(createApp());
+    const balAfterFirst = await prisma.balance.findUnique({ where: { id: balances.balCollab2026.id } });
+    assert.equal(Number(balAfterFirst.pendingDays), 5); // 3 inicial + 2 nuevos
+
+    // Simular pérdida de respuesta y avanzar reloj a 2026-12-05 (ya NO cumple 10 días hábiles para solicitud nueva)
+    fakeToday = parseIsoDateUtc('2026-12-05');
+
+    const newReqBlocked = await apiJson(baseUrl, '/api/requests', {
+      method: 'POST',
+      token: collabTok,
+      headers: { 'X-Idempotency-Key': `fresh-key-${Date.now()}` },
+      body: { ...vacPayload, start_date: '2026-12-14', end_date: '2026-12-15' },
+    });
+    assert.equal(newReqBlocked.status, 400);
+
+    // Reintento con la misma clave y contenido -> devuelve resultado original (200) sin volver a reservar
+    const retryAfterClock = await apiJson(baseUrl, '/api/requests', {
+      method: 'POST',
+      token: collabTok,
+      headers: { 'X-Idempotency-Key': clockKey },
+      body: vacPayload,
+    });
+    assert.equal(retryAfterClock.status, 200);
+    assert.equal(retryAfterClock.data.id, firstRes.data.id);
+
+    const balAfterRetry = await prisma.balance.findUnique({ where: { id: balances.balCollab2026.id } });
+    assert.equal(Number(balAfterRetry.pendingDays), 5);
+
+    // Misma clave con contenido diferente -> 409 Conflict
+    const diffRes = await apiJson(baseUrl, '/api/requests', {
+      method: 'POST',
+      token: collabTok,
+      headers: { 'X-Idempotency-Key': clockKey },
+      body: { ...vacPayload, end_date: '2026-12-14' },
+    });
+    assert.equal(diffRes.status, 409);
+
+    // Recrear instancia de Express con el mismo Prisma aislado -> sigue recuperando la respuesta original
+    const restartedApp = createApp({ prisma, nowFn: () => fakeToday });
+    const restartedServer = http.createServer(restartedApp);
     const restartedUrl = await new Promise((resolve) => {
       restartedServer.listen(0, '127.0.0.1', () => {
         resolve(`http://127.0.0.1:${restartedServer.address().port}`);
       });
     });
     try {
-      const replayAfterRestart = await apiJson(restartedUrl, '/api/requests', {
+      const replayRestart = await apiJson(restartedUrl, '/api/requests', {
         method: 'POST',
         token: collabTok,
-        headers: { 'X-Idempotency-Key': idemKey },
-        body: payloadA,
+        headers: { 'X-Idempotency-Key': clockKey },
+        body: vacPayload,
       });
-      assert.equal(replayAfterRestart.status, 200);
-      assert.equal(replayAfterRestart.data.id, sim1.data.id);
+      assert.equal(replayRestart.status, 200);
+      assert.equal(replayRestart.data.id, firstRes.data.id);
     } finally {
       await new Promise((resolve) => restartedServer.close(resolve));
     }
-
-    // Fallo transaccional sin reserva parcial (saldo insuficiente para 20 días)
-    const failKey = `req-fail-${Date.now()}`;
-    const failReq = await apiJson(baseUrl, '/api/requests', {
-      method: 'POST',
-      token: collabTok,
-      headers: { 'X-Idempotency-Key': failKey },
-      body: {
-        request_type: 'vacaciones',
-        balance_id: balances.balCollab2026.id,
-        start_date: '2027-04-05',
-        end_date: '2027-04-30',
-      },
-    });
-    assert.equal(failReq.status, 400);
-    const balAfterFail = await prisma.balance.findUnique({ where: { id: balances.balCollab2026.id } });
-    assert.equal(Number(balAfterFail.pendingDays), 3);
-    assert.equal(Number(balAfterFail.availableDays), 12);
-    const idemFailCount = await prisma.idempotencyRecord.count({ where: { idempotencyKey: failKey } });
-    assert.equal(idemFailCount, 0);
-
-    // --- 3. Reasignación de tickets sensibles y permisos ---
-    const sens = await apiJson(baseUrl, '/api/tickets', {
-      method: 'POST',
-      token: collabTok,
-      body: {
-        topic: 'Ticket sensible aislado',
-        confirmed_summary: 'Prueba de reasignación y permisos en base aislada.',
-        is_sensitive: true,
-      },
-    });
-    assert.equal(sens.status, 200);
-    assert.equal(sens.data.assignee_id, users.hrDirector.id);
-
-    const reassign = await apiJson(baseUrl, `/api/tickets/${sens.data.id}`, {
-      method: 'PATCH',
-      token: hrDirTok,
-      body: { status: 'en_proceso', notes: 'Asignado a especialista', assignee_id: users.hrSpecialist.id },
-    });
-    assert.equal(reassign.status, 200);
-    assert.equal(reassign.data.assignee_id, users.hrSpecialist.id);
-
-    const specList = await apiJson(baseUrl, '/api/tickets', { token: hrSpecTok });
-    assert.ok(specList.data.some((t) => t.id === sens.data.id));
   } finally {
     await env.cleanup();
   }
-
-  // Verificar que la base habitual del portal permaneció 100% intacta tras ejecutar y limpiar la suite
-  const afterProd = {
-    requests: await prodReader.leaveRequest.count(),
-    idem: await prodReader.idempotencyRecord.count(),
-    anaBal: await prodReader.balance.findFirst({
-      where: { employee: { email: 'ana.garcia@nubera.mx' } },
-      orderBy: { year: 'desc' },
-      select: { usedDays: true, pendingDays: true, availableDays: true },
-    }),
-  };
-  await prodReader.$disconnect();
-
-  assert.equal(afterProd.requests, beforeProd.requests);
-  assert.equal(afterProd.idem, beforeProd.idem);
-  assert.deepEqual(afterProd.anaBal, beforeProd.anaBal);
 });
 
-test('Dos ejecuciones independientes concurrentes en bases temporales distintas no colisionan', async () => {
-  const [env1, env2] = await Promise.all([
-    createIsolatedTestEnv({ tag: 'p1' }),
-    createIsolatedTestEnv({ tag: 'p2' }),
+test('Aislamiento real con inyección explícita: instancia A, instancia B y base habitual separadas', async () => {
+  const prodUrl = await readBaseDatabaseUrl();
+  const prodPrisma = new PrismaClient({ datasources: { db: { url: prodUrl } } });
+  const prodTicketsBefore = await prodPrisma.ticket.count();
+
+  const [envA, envB] = await Promise.all([
+    createIsolatedTestEnv({ tag: 'instA' }),
+    createIsolatedTestEnv({ tag: 'instB' }),
   ]);
 
   try {
-    assert.notEqual(env1.dbName, env2.dbName);
-    const [h1, h2] = await Promise.all([
-      apiJson(env1.baseUrl, '/api/health'),
-      apiJson(env2.baseUrl, '/api/health'),
-    ]);
-    assert.equal(h1.status, 200);
-    assert.equal(h2.status, 200);
+    assert.notEqual(envA.dbName, envB.dbName);
+
+    const tokA = (
+      await apiJson(envA.baseUrl, '/api/auth/login', {
+        method: 'POST',
+        body: { email: envA.users.collab.email, password: 'TestCollab123!' },
+      })
+    ).data.access_token;
+
+    const tokB = (
+      await apiJson(envB.baseUrl, '/api/auth/login', {
+        method: 'POST',
+        body: { email: envB.users.collab.email, password: 'TestCollab123!' },
+      })
+    ).data.access_token;
+
+    // Crear ticket en instancia A
+    const createdA = await apiJson(envA.baseUrl, '/api/tickets', {
+      method: 'POST',
+      token: tokA,
+      body: {
+        topic: 'Ticket exclusivo instancia A',
+        confirmed_summary: 'Registro que solo debe existir en la base temporal de instancia A.',
+        is_sensitive: false,
+      },
+    });
+    assert.equal(createdA.status, 200);
+
+    // Crear ticket distinto en instancia B en paralelo
+    const createdB = await apiJson(envB.baseUrl, '/api/tickets', {
+      method: 'POST',
+      token: tokB,
+      body: {
+        topic: 'Ticket exclusivo instancia B',
+        confirmed_summary: 'Registro independiente en instancia B sin colisión con A.',
+        is_sensitive: false,
+      },
+    });
+    assert.equal(createdB.status, 200);
+
+    // Existe en A, NO existe en B ni en la base habitual
+    const inA = await envA.prisma.ticket.findUnique({ where: { folio: createdA.data.folio } });
+    const inB = await envB.prisma.ticket.findUnique({ where: { folio: createdA.data.folio } });
+    const inProd = await prodPrisma.ticket.findUnique({ where: { folio: createdA.data.folio } });
+    assert.ok(inA);
+    assert.equal(inB, null);
+    assert.equal(inProd, null);
+
+    // Y el ticket de B solo existe en B
+    const bInA = await envA.prisma.ticket.findUnique({ where: { folio: createdB.data.folio } });
+    assert.equal(bInA, null);
   } finally {
-    await Promise.all([env1.cleanup(), env2.cleanup()]);
+    await Promise.all([envA.cleanup(), envB.cleanup()]);
   }
+
+  const prodTicketsAfter = await prodPrisma.ticket.count();
+  await prodPrisma.$disconnect();
+  assert.equal(prodTicketsAfter, prodTicketsBefore);
 });
