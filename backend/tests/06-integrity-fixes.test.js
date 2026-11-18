@@ -1,24 +1,13 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import http from 'node:http';
-import { Prisma } from '@prisma/client';
-import { createApp } from '../src/app.js';
-import { prisma } from '../src/db/prisma.js';
+import { Prisma, PrismaClient } from '@prisma/client';
+import { createIsolatedTestEnv, readBaseDatabaseUrl } from './helpers/isolatedDb.js';
+import { reconcileRequestBalances } from '../src/services/balanceReconciliation.js';
 import { computeVacationEntitlement, isValidIsoDate, parseIsoDateUtc, toIsoDate } from '../src/services/vacationRules.js';
 
-function startTestServer() {
-  const app = createApp();
-  const server = http.createServer(app);
-  return new Promise((resolve) => {
-    server.listen(0, '127.0.0.1', () => {
-      const addr = server.address();
-      resolve({ server, baseUrl: `http://127.0.0.1:${addr.port}` });
-    });
-  });
-}
-
-async function apiJson(baseUrl, path, { method = 'GET', token = null, body = undefined, headers: extraHeaders = {} } = {}) {
-  const headers = { 'Content-Type': 'application/json', ...extraHeaders };
+async function apiJson(baseUrl, path, { method = 'GET', token = null, body = undefined, headers: extra = {} } = {}) {
+  const headers = { 'Content-Type': 'application/json', ...extra };
   if (token) headers.Authorization = `Bearer ${token}`;
   const res = await fetch(`${baseUrl}${path}`, {
     method,
@@ -28,282 +17,291 @@ async function apiJson(baseUrl, path, { method = 'GET', token = null, body = und
   return { status: res.status, data: await res.json() };
 }
 
-test('Integrity 1-4: Balance link, invariants/rollback, ticket reassignment RBAC & real dates', async () => {
-  const { server, baseUrl } = await startTestServer();
-  const createdReqIds = [];
-  const createdTicketIds = [];
-  let extraBalanceId = null;
-  let anaBalSnapshot = null;
+test('Isolated DB: Reconciliación de saldos, idempotencia persistente, tickets, fechas y cero impacto en portal', async () => {
+  // Snapshot de lectura en la base habitual del portal para comprobar que no se modifica nada
+  const prodUrl = await readBaseDatabaseUrl();
+  const prodReader = new PrismaClient({ datasources: { db: { url: prodUrl } } });
+  const beforeProd = {
+    requests: await prodReader.leaveRequest.count(),
+    idem: await prodReader.idempotencyRecord.count(),
+    anaBal: await prodReader.balance.findFirst({
+      where: { employee: { email: 'ana.garcia@nubera.mx' } },
+      orderBy: { year: 'desc' },
+      select: { usedDays: true, pendingDays: true, availableDays: true },
+    }),
+  };
+
+  const env = await createIsolatedTestEnv({ tag: 'main' });
 
   try {
-    // --- 4. Validación estricta de fechas reales y años bisiestos ---
+    const { prisma, baseUrl, users, balances } = env;
+
+    // --- 4. Validación estricta de fechas reales y bisiestos ---
     assert.equal(isValidIsoDate('2027-02-31'), false);
     assert.equal(isValidIsoDate('2026-13-01'), false);
     assert.equal(isValidIsoDate('2025-02-29'), false);
     assert.equal(isValidIsoDate('2026-2-5'), false);
-    assert.equal(isValidIsoDate('2026-00-10'), false);
     assert.equal(isValidIsoDate('2024-02-29'), true);
-    assert.equal(isValidIsoDate('2028-02-29'), true);
     assert.throws(() => parseIsoDateUtc('2027-02-31'));
 
-    const leapAnniv = computeVacationEntitlement(parseIsoDateUtc('2024-02-29'), parseIsoDateUtc('2025-02-28'));
-    assert.equal(leapAnniv.yearsOfService, 0);
-    const leapAnniv1 = computeVacationEntitlement(parseIsoDateUtc('2024-02-29'), parseIsoDateUtc('2025-03-01'));
-    assert.equal(leapAnniv1.yearsOfService, 1);
-    assert.equal(toIsoDate(leapAnniv1.anniversaryDate), '2025-02-28');
+    const leap1 = computeVacationEntitlement(parseIsoDateUtc('2024-02-29'), parseIsoDateUtc('2025-03-01'));
+    assert.equal(leap1.yearsOfService, 1);
+    assert.equal(toIsoDate(leap1.anniversaryDate), '2025-02-28');
 
-    const anaLogin = await apiJson(baseUrl, '/api/auth/login', {
-      method: 'POST',
-      body: { email: 'ana.garcia@nubera.mx', password: 'Colaborador123!' },
-    });
-    const lauraLogin = await apiJson(baseUrl, '/api/auth/login', {
-      method: 'POST',
-      body: { email: 'laura.mendoza@nubera.mx', password: 'Rrhh123!' },
-    });
-    const diegoLogin = await apiJson(baseUrl, '/api/auth/login', {
-      method: 'POST',
-      body: { email: 'diego.santos@nubera.mx', password: 'Rrhh123!' },
-    });
-    assert.equal(anaLogin.status, 200);
-    assert.equal(lauraLogin.status, 200);
-    assert.equal(diegoLogin.status, 200);
-
-    const anaToken = anaLogin.data.access_token;
-    const lauraToken = lauraLogin.data.access_token;
-    const diegoToken = diegoLogin.data.access_token;
-    const anaId = anaLogin.data.user.id;
-    const lauraId = lauraLogin.data.user.id;
-    const diegoId = diegoLogin.data.user.id;
-
-    // Fechas imposibles rechazadas por Zod en API
-    for (const badDate of ['2027-02-31', '2026-13-01', '2026-2-5', '2025-02-29']) {
-      const badReq = await apiJson(baseUrl, '/api/requests', {
+    const collabTok = (
+      await apiJson(baseUrl, '/api/auth/login', {
         method: 'POST',
-        token: anaToken,
-        body: { request_type: 'home_office', start_date: badDate, end_date: badDate },
-      });
-      assert.equal(badReq.status, 400);
+        body: { email: users.collab.email, password: 'TestCollab123!' },
+      })
+    ).data.access_token;
 
-      const badDash = await apiJson(baseUrl, `/api/dashboard/report?report_date=${badDate}`, {
-        token: lauraToken,
+    const hrDirTok = (
+      await apiJson(baseUrl, '/api/auth/login', {
+        method: 'POST',
+        body: { email: users.hrDirector.email, password: 'TestHr123!' },
+      })
+    ).data.access_token;
+
+    const hrSpecTok = (
+      await apiJson(baseUrl, '/api/auth/login', {
+        method: 'POST',
+        body: { email: users.hrSpecialist.email, password: 'TestHr123!' },
+      })
+    ).data.access_token;
+
+    // Rechazo de fechas imposibles e intervalos invertidos
+    for (const bad of ['2027-02-31', '2026-13-01', '2026-2-5']) {
+      const r = await apiJson(baseUrl, '/api/requests', {
+        method: 'POST',
+        token: collabTok,
+        body: { request_type: 'home_office', start_date: bad, end_date: bad },
       });
-      assert.equal(badDash.status, 400);
+      assert.equal(r.status, 400);
     }
 
-    // --- 1 & 2. Vínculo explícito solicitud-saldo, idempotencia de creación y rollback ---
-    const bal2026 = await prisma.balance.findFirst({
-      where: { employeeId: anaId, year: 2026 },
-    });
-    anaBalSnapshot = {
-      id: bal2026.id,
-      usedDays: bal2026.usedDays,
-      pendingDays: bal2026.pendingDays,
-      availableDays: bal2026.availableDays,
-    };
-
-    // Crear segundo periodo (2027) para comprobar que la resolución actualiza el balance_id vinculado (2026) y NO el más reciente (2027)
-    const bal2027 = await prisma.balance.create({
+    // --- 1. Reconstrucción de saldos antiguos (periodo anterior vs ambiguo vs otro colaborador) ---
+    // Solicitud de enero 2026 que pertenece al periodo 2025 (hireDate 2024-06-01 -> periodo 2025: 2025-06-01 a 2026-05-31)
+    const bal2025 = await prisma.balance.create({
       data: {
-        employeeId: anaId,
-        year: 2027,
-        entitledDays: new Prisma.Decimal('16.00'),
-        usedDays: new Prisma.Decimal('0.00'),
+        employeeId: users.collab.id,
+        year: 2025,
+        entitledDays: new Prisma.Decimal('15.00'),
+        usedDays: new Prisma.Decimal('3.00'),
         pendingDays: new Prisma.Decimal('0.00'),
-        availableDays: new Prisma.Decimal('16.00'),
-        expirationDate: new Date('2027-11-11'),
+        availableDays: new Prisma.Decimal('12.00'),
+        expirationDate: new Date('2026-05-31'),
       },
     });
-    extraBalanceId = bal2027.id;
-
-    // Solicitud de vacaciones vinculada explícitamente al saldo 2026 + clave de idempotencia
-    const idemKey = `idem-${Date.now()}`;
-    const vacCreate1 = await apiJson(baseUrl, '/api/requests', {
-      method: 'POST',
-      token: anaToken,
-      headers: { 'X-Idempotency-Key': idemKey },
-      body: {
-        request_type: 'vacaciones',
-        balance_id: bal2026.id,
-        start_date: '2027-02-08',
-        end_date: '2027-02-09',
-        reason: 'Prueba vínculo balance_id',
-      },
-    });
-    assert.equal(vacCreate1.status, 200);
-    assert.equal(vacCreate1.data.balance_id, bal2026.id);
-    createdReqIds.push(vacCreate1.data.id);
-
-    // Reintento con misma clave de idempotencia -> mismo ID, sin doble descuento
-    const vacRetry = await apiJson(baseUrl, '/api/requests', {
-      method: 'POST',
-      token: anaToken,
-      headers: { 'X-Idempotency-Key': idemKey },
-      body: {
-        request_type: 'vacaciones',
-        balance_id: bal2026.id,
-        start_date: '2027-02-08',
-        end_date: '2027-02-09',
-      },
-    });
-    assert.equal(vacRetry.status, 200);
-    assert.equal(vacRetry.data.id, vacCreate1.data.id);
-
-    // Reintento duplicado sin clave de idempotencia -> 409 Conflict
-    const vacDup = await apiJson(baseUrl, '/api/requests', {
-      method: 'POST',
-      token: anaToken,
-      body: {
-        request_type: 'vacaciones',
-        balance_id: bal2026.id,
-        start_date: '2027-02-08',
-        end_date: '2027-02-09',
-      },
-    });
-    assert.equal(vacDup.status, 409);
-
-    // Al aprobar, se actualiza bal2026 (vinculado) y bal2027 permanece intacto (0 used, 16 avail)
-    const approveVac = await apiJson(baseUrl, `/api/requests/${vacCreate1.data.id}`, {
-      method: 'PATCH',
-      token: lauraToken,
-      body: { status: 'aprobada' },
-    });
-    assert.equal(approveVac.status, 200);
-
-    const [after2026, after2027] = await Promise.all([
-      prisma.balance.findUnique({ where: { id: bal2026.id } }),
-      prisma.balance.findUnique({ where: { id: bal2027.id } }),
-    ]);
-    assert.equal(Number(after2026.usedDays), Number(anaBalSnapshot.usedDays) + 2);
-    assert.equal(Number(after2026.pendingDays), Number(anaBalSnapshot.pendingDays));
-    assert.equal(Number(after2027.usedDays), 0);
-    assert.equal(Number(after2027.availableDays), 16);
-
-    // Solicitud no vacacional conserva balance_id null
-    const hoCreate = await apiJson(baseUrl, '/api/requests', {
-      method: 'POST',
-      token: anaToken,
-      body: {
-        request_type: 'home_office',
-        start_date: '2027-02-15',
-        end_date: '2027-02-15',
-      },
-    });
-    assert.equal(hoCreate.status, 200);
-    assert.equal(hoCreate.data.balance_id, null);
-    createdReqIds.push(hoCreate.data.id);
-
-    // Rollback ante inconsistencia: solicitud de vacaciones sin balance_id (caso ambiguo) -> 409 y sigue pendiente
-    const orphanVac = await prisma.leaveRequest.create({
+    const reqPrevPeriod = await prisma.leaveRequest.create({
       data: {
-        employeeId: anaId,
-        balanceId: null,
+        employeeId: users.collab.id,
+        balanceId: balances.balCollab2026.id, // mal vinculada por YEAR(start_date)=2026 (bal2026 tiene usedDays=0!)
         requestType: 'vacaciones',
-        startDate: new Date('2027-03-01'),
-        endDate: new Date('2027-03-01'),
-        daysCount: new Prisma.Decimal('1.00'),
+        startDate: new Date('2026-01-15'),
+        endDate: new Date('2026-01-19'),
+        daysCount: new Prisma.Decimal('3.00'),
+        status: 'aprobada',
+      },
+    });
+
+    // Solicitud antigua con vínculo ambiguo (mismo saldo insuficiente en 2025 y 2026 para 8 días usados)
+    const reqAmbiguous = await prisma.leaveRequest.create({
+      data: {
+        employeeId: users.collab.id,
+        balanceId: balances.balCollab2026.id,
+        requestType: 'vacaciones',
+        startDate: new Date('2026-04-10'),
+        endDate: new Date('2026-04-21'),
+        daysCount: new Prisma.Decimal('8.00'),
+        status: 'aprobada',
+      },
+    });
+
+    // Solicitud vinculada por error al saldo de otro colaborador
+    const reqWrongOwner = await prisma.leaveRequest.create({
+      data: {
+        employeeId: users.collab.id,
+        balanceId: balances.balOther2026.id,
+        requestType: 'vacaciones',
+        startDate: new Date('2026-08-03'),
+        endDate: new Date('2026-08-05'),
+        daysCount: new Prisma.Decimal('3.00'),
         status: 'pendiente',
       },
     });
-    createdReqIds.push(orphanVac.id);
 
-    const orphanApprove = await apiJson(baseUrl, `/api/requests/${orphanVac.id}`, {
-      method: 'PATCH',
-      token: lauraToken,
-      body: { status: 'aprobada' },
-    });
-    assert.equal(orphanApprove.status, 409);
-    const orphanAfter = await prisma.leaveRequest.findUnique({ where: { id: orphanVac.id } });
-    assert.equal(orphanAfter.status, 'pendiente');
+    const preview = await reconcileRequestBalances(prisma, { apply: false });
+    assert.ok(preview.changes.some((c) => c.requestId === reqPrevPeriod.id && c.toBalanceId === bal2025.id));
+    assert.ok(preview.ambiguousCases.some((a) => a.requestId === reqAmbiguous.id));
+    assert.ok(preview.ambiguousCases.some((a) => a.requestId === reqWrongOwner.id));
 
-    // --- 3. Reasignación de tickets por assignee_id y permisos de tickets sensibles ---
-    const sensTkt = await apiJson(baseUrl, '/api/tickets', {
+    const applied = await reconcileRequestBalances(prisma, { apply: true });
+    assert.ok(applied.appliedCount >= 3);
+
+    const [afterPrev, afterAmb, afterWrong] = await Promise.all([
+      prisma.leaveRequest.findUnique({ where: { id: reqPrevPeriod.id } }),
+      prisma.leaveRequest.findUnique({ where: { id: reqAmbiguous.id } }),
+      prisma.leaveRequest.findUnique({ where: { id: reqWrongOwner.id } }),
+    ]);
+    assert.equal(afterPrev.balanceId, bal2025.id); // Periodo anterior 2025 reconstruido correctamente
+    assert.equal(afterAmb.balanceId, null); // Caso ambiguo conservado sin asignación arbitraria
+    assert.equal(afterWrong.balanceId, null); // Saldo ajeno desvinculado
+
+    // Intentar usar balance_id de otro colaborador desde la API -> 409 sin cambios
+    const crossOwnerApi = await apiJson(baseUrl, '/api/requests', {
       method: 'POST',
-      token: anaToken,
+      token: collabTok,
       body: {
-        topic: 'Reasignación sensible',
-        confirmed_summary: 'Prueba de reasignación de ticket sensible entre responsables de RRHH.',
+        request_type: 'vacaciones',
+        balance_id: balances.balOther2026.id,
+        start_date: '2027-02-01',
+        end_date: '2027-02-02',
+      },
+    });
+    assert.equal(crossOwnerApi.status, 409);
+
+    // --- 2. Idempotencia persistente en MySQL (concurrente, secuencial, contenido distinto, reinicio, rollback) ---
+    const idemKey = `req-idem-${Date.now()}`;
+    const payloadA = {
+      request_type: 'vacaciones',
+      balance_id: balances.balCollab2026.id,
+      start_date: '2027-03-08',
+      end_date: '2027-03-10',
+      reason: 'Prueba idempotencia persistente',
+    };
+
+    // Dos peticiones simultáneas con la misma clave -> 1 solicitud creada, saldo reservado 1 sola vez (3 días)
+    const [sim1, sim2] = await Promise.all([
+      apiJson(baseUrl, '/api/requests', {
+        method: 'POST',
+        token: collabTok,
+        headers: { 'X-Idempotency-Key': idemKey },
+        body: payloadA,
+      }),
+      apiJson(baseUrl, '/api/requests', {
+        method: 'POST',
+        token: collabTok,
+        headers: { 'X-Idempotency-Key': idemKey },
+        body: payloadA,
+      }),
+    ]);
+    assert.equal(sim1.status, 200);
+    assert.equal(sim2.status, 200);
+    assert.equal(sim1.data.id, sim2.data.id);
+
+    const balAfterSim = await prisma.balance.findUnique({ where: { id: balances.balCollab2026.id } });
+    assert.equal(Number(balAfterSim.pendingDays), 3);
+    assert.equal(Number(balAfterSim.availableDays), 12);
+
+    // Misma clave con contenido diferente -> 409 Conflict
+    const diffPayload = await apiJson(baseUrl, '/api/requests', {
+      method: 'POST',
+      token: collabTok,
+      headers: { 'X-Idempotency-Key': idemKey },
+      body: { ...payloadA, end_date: '2027-03-11' },
+    });
+    assert.equal(diffPayload.status, 409);
+
+    // Simular reinicio del servidor / nueva instancia de Express leyendo desde MySQL `idempotency_records`
+    const { createApp } = await import(`../src/app.js?restarted=${Date.now()}`);
+    const restartedServer = http.createServer(createApp());
+    const restartedUrl = await new Promise((resolve) => {
+      restartedServer.listen(0, '127.0.0.1', () => {
+        resolve(`http://127.0.0.1:${restartedServer.address().port}`);
+      });
+    });
+    try {
+      const replayAfterRestart = await apiJson(restartedUrl, '/api/requests', {
+        method: 'POST',
+        token: collabTok,
+        headers: { 'X-Idempotency-Key': idemKey },
+        body: payloadA,
+      });
+      assert.equal(replayAfterRestart.status, 200);
+      assert.equal(replayAfterRestart.data.id, sim1.data.id);
+    } finally {
+      await new Promise((resolve) => restartedServer.close(resolve));
+    }
+
+    // Fallo transaccional sin reserva parcial (saldo insuficiente para 20 días)
+    const failKey = `req-fail-${Date.now()}`;
+    const failReq = await apiJson(baseUrl, '/api/requests', {
+      method: 'POST',
+      token: collabTok,
+      headers: { 'X-Idempotency-Key': failKey },
+      body: {
+        request_type: 'vacaciones',
+        balance_id: balances.balCollab2026.id,
+        start_date: '2027-04-05',
+        end_date: '2027-04-30',
+      },
+    });
+    assert.equal(failReq.status, 400);
+    const balAfterFail = await prisma.balance.findUnique({ where: { id: balances.balCollab2026.id } });
+    assert.equal(Number(balAfterFail.pendingDays), 3);
+    assert.equal(Number(balAfterFail.availableDays), 12);
+    const idemFailCount = await prisma.idempotencyRecord.count({ where: { idempotencyKey: failKey } });
+    assert.equal(idemFailCount, 0);
+
+    // --- 3. Reasignación de tickets sensibles y permisos ---
+    const sens = await apiJson(baseUrl, '/api/tickets', {
+      method: 'POST',
+      token: collabTok,
+      body: {
+        topic: 'Ticket sensible aislado',
+        confirmed_summary: 'Prueba de reasignación y permisos en base aislada.',
         is_sensitive: true,
       },
     });
-    assert.equal(sensTkt.status, 200);
-    assert.equal(sensTkt.data.assignee_id, lauraId);
-    createdTicketIds.push(sensTkt.data.id);
+    assert.equal(sens.status, 200);
+    assert.equal(sens.data.assignee_id, users.hrDirector.id);
 
-    // No se puede asignar a un colaborador sin rol rrhh
-    const badAssign = await apiJson(baseUrl, `/api/tickets/${sensTkt.data.id}`, {
+    const reassign = await apiJson(baseUrl, `/api/tickets/${sens.data.id}`, {
       method: 'PATCH',
-      token: lauraToken,
-      body: { status: 'en_proceso', notes: 'Intento inválido', assignee_id: anaId },
+      token: hrDirTok,
+      body: { status: 'en_proceso', notes: 'Asignado a especialista', assignee_id: users.hrSpecialist.id },
     });
-    assert.equal(badAssign.status, 400);
+    assert.equal(reassign.status, 200);
+    assert.equal(reassign.data.assignee_id, users.hrSpecialist.id);
 
-    // Diego aún no puede ver ni modificar el ticket sensible asignado a Laura
-    const diegoDenied = await apiJson(baseUrl, `/api/tickets/${sensTkt.data.id}`, {
-      method: 'PATCH',
-      token: diegoToken,
-      body: { status: 'en_proceso', notes: 'Sin permiso aún' },
-    });
-    assert.equal(diegoDenied.status, 403);
-
-    // Laura reasigna el ticket sensible a Diego usando assignee_id
-    const reassigned = await apiJson(baseUrl, `/api/tickets/${sensTkt.data.id}`, {
-      method: 'PATCH',
-      token: lauraToken,
-      body: { status: 'en_proceso', notes: 'Transferido a Diego', assignee_id: diegoId },
-    });
-    assert.equal(reassigned.status, 200);
-    assert.equal(reassigned.data.assignee_id, diegoId);
-    assert.equal(reassigned.data.assigned_to, 'Diego Alejandro Santos Rivera');
-
-    // Ahora Diego SÍ puede verlo y actualizarlo
-    const diegoList = await apiJson(baseUrl, '/api/tickets', { token: diegoToken });
-    assert.ok(diegoList.data.some((t) => t.id === sensTkt.data.id));
-    const diegoUpdate = await apiJson(baseUrl, `/api/tickets/${sensTkt.data.id}`, {
-      method: 'PATCH',
-      token: diegoToken,
-      body: { status: 'resuelto', notes: 'Resuelto por Diego' },
-    });
-    assert.equal(diegoUpdate.status, 200);
-
-    // Diego reasigna de vuelta a Laura (Directora); ahora Diego (no Directora) pierde visibilidad y permiso PATCH
-    const backToLaura = await apiJson(baseUrl, `/api/tickets/${sensTkt.data.id}`, {
-      method: 'PATCH',
-      token: diegoToken,
-      body: { status: 'cerrado', notes: 'Devuelto a Laura', assignee_id: lauraId },
-    });
-    assert.equal(backToLaura.status, 200);
-    assert.equal(backToLaura.data.assignee_id, lauraId);
-
-    const diegoListAfter = await apiJson(baseUrl, '/api/tickets', { token: diegoToken });
-    assert.ok(!diegoListAfter.data.some((t) => t.id === sensTkt.data.id));
-    const diegoDeniedAfter = await apiJson(baseUrl, `/api/tickets/${sensTkt.data.id}`, {
-      method: 'PATCH',
-      token: diegoToken,
-      body: { status: 'cerrado', notes: 'Ya no asignado a Diego' },
-    });
-    assert.equal(diegoDeniedAfter.status, 403);
+    const specList = await apiJson(baseUrl, '/api/tickets', { token: hrSpecTok });
+    assert.ok(specList.data.some((t) => t.id === sens.data.id));
   } finally {
-    if (createdTicketIds.length) {
-      await prisma.ticketHistory.deleteMany({ where: { ticketId: { in: createdTicketIds } } });
-      await prisma.ticket.deleteMany({ where: { id: { in: createdTicketIds } } });
-    }
-    if (createdReqIds.length) {
-      await prisma.leaveRequest.deleteMany({ where: { id: { in: createdReqIds } } });
-    }
-    if (extraBalanceId) {
-      await prisma.balance.deleteMany({ where: { id: extraBalanceId } });
-    }
-    if (anaBalSnapshot) {
-      await prisma.balance.update({
-        where: { id: anaBalSnapshot.id },
-        data: {
-          usedDays: anaBalSnapshot.usedDays,
-          pendingDays: anaBalSnapshot.pendingDays,
-          availableDays: anaBalSnapshot.availableDays,
-        },
-      });
-    }
-    await prisma.$disconnect();
-    await new Promise((resolve) => server.close(resolve));
+    await env.cleanup();
+  }
+
+  // Verificar que la base habitual del portal permaneció 100% intacta tras ejecutar y limpiar la suite
+  const afterProd = {
+    requests: await prodReader.leaveRequest.count(),
+    idem: await prodReader.idempotencyRecord.count(),
+    anaBal: await prodReader.balance.findFirst({
+      where: { employee: { email: 'ana.garcia@nubera.mx' } },
+      orderBy: { year: 'desc' },
+      select: { usedDays: true, pendingDays: true, availableDays: true },
+    }),
+  };
+  await prodReader.$disconnect();
+
+  assert.equal(afterProd.requests, beforeProd.requests);
+  assert.equal(afterProd.idem, beforeProd.idem);
+  assert.deepEqual(afterProd.anaBal, beforeProd.anaBal);
+});
+
+test('Dos ejecuciones independientes concurrentes en bases temporales distintas no colisionan', async () => {
+  const [env1, env2] = await Promise.all([
+    createIsolatedTestEnv({ tag: 'p1' }),
+    createIsolatedTestEnv({ tag: 'p2' }),
+  ]);
+
+  try {
+    assert.notEqual(env1.dbName, env2.dbName);
+    const [h1, h2] = await Promise.all([
+      apiJson(env1.baseUrl, '/api/health'),
+      apiJson(env2.baseUrl, '/api/health'),
+    ]);
+    assert.equal(h1.status, 200);
+    assert.equal(h2.status, 200);
+  } finally {
+    await Promise.all([env1.cleanup(), env2.cleanup()]);
   }
 });

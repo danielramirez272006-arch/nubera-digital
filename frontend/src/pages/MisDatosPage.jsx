@@ -16,6 +16,11 @@ export default function MisDatosPage() {
   const [reason, setReason] = useState('');
   const [formMsg, setFormMsg] = useState(null);
   const [submitting, setSubmitting] = useState(false);
+  const [idempotencyKey, setIdempotencyKey] = useState(() => crypto.randomUUID());
+
+  function resetOperationKey() {
+    setIdempotencyKey(crypto.randomUUID());
+  }
 
   async function fetchMyData() {
     setLoading(true);
@@ -51,6 +56,7 @@ export default function MisDatosPage() {
     try {
       await apiRequest('/api/requests', {
         method: 'POST',
+        headers: { 'X-Idempotency-Key': idempotencyKey },
         body: JSON.stringify({
           request_type: reqType,
           start_date: startDate,
@@ -63,8 +69,10 @@ export default function MisDatosPage() {
       setStartDate('');
       setEndDate('');
       setReason('');
+      resetOperationKey();
       await fetchMyData();
     } catch (err) {
+      // Mantiene la misma clave de idempotencia ante reintentos si la respuesta se perdió o falló la red
       setFormMsg({ type: 'err', text: err instanceof Error ? err.message : 'No se pudo registrar la solicitud.' });
     } finally {
       setSubmitting(false);
@@ -171,7 +179,7 @@ export default function MisDatosPage() {
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.75rem', flexWrap: 'wrap', gap: '0.5rem' }}>
           <h2 style={{ margin: 0, fontSize: '1.05rem' }}>Mis solicitudes recientes</h2>
           <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
-            <button type="button" className="btn btn-primary" style={{ padding: '0.4rem 0.8rem', fontSize: '0.82rem' }} onClick={() => setShowForm((v) => !v)}>
+            <button type="button" className="btn btn-primary" style={{ padding: '0.4rem 0.8rem', fontSize: '0.82rem' }} onClick={() => { setShowForm((v) => !v); resetOperationKey(); }}>
               <Plus size={14} aria-hidden="true" /> {showForm ? 'Cerrar formulario' : 'Nueva solicitud'}
             </button>
             <button type="button" className="chip-btn" onClick={() => askInChat('¿Cuál es el estatus de mis solicitudes?')}>
@@ -200,7 +208,7 @@ export default function MisDatosPage() {
           <form onSubmit={handleCreateRequest} style={{ background: 'var(--bg-page)', padding: '1rem', borderRadius: 8, border: '1px solid var(--border)', marginBottom: '1rem', display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: '0.75rem' }}>
             <div>
               <label htmlFor="req-type" style={{ display: 'block', fontSize: '0.82rem', fontWeight: 600, marginBottom: 4 }}>Tipo</label>
-              <select id="req-type" className="input" value={reqType} onChange={(e) => setReqType(e.target.value)}>
+              <select id="req-type" className="input" value={reqType} onChange={(e) => { setReqType(e.target.value); resetOperationKey(); }}>
                 <option value="vacaciones">Vacaciones (RH-01: 10 días hábiles antes)</option>
                 <option value="permiso_con_goce">Permiso con goce</option>
                 <option value="permiso_sin_goce">Permiso sin goce</option>
@@ -209,15 +217,15 @@ export default function MisDatosPage() {
             </div>
             <div>
               <label htmlFor="req-start" style={{ display: 'block', fontSize: '0.82rem', fontWeight: 600, marginBottom: 4 }}>Fecha inicio</label>
-              <input id="req-start" type="date" required className="input" value={startDate} onChange={(e) => setStartDate(e.target.value)} />
+              <input id="req-start" type="date" required className="input" value={startDate} onChange={(e) => { setStartDate(e.target.value); resetOperationKey(); }} />
             </div>
             <div>
               <label htmlFor="req-end" style={{ display: 'block', fontSize: '0.82rem', fontWeight: 600, marginBottom: 4 }}>Fecha fin</label>
-              <input id="req-end" type="date" required className="input" value={endDate} onChange={(e) => setEndDate(e.target.value)} />
+              <input id="req-end" type="date" required className="input" value={endDate} onChange={(e) => { setEndDate(e.target.value); resetOperationKey(); }} />
             </div>
             <div>
               <label htmlFor="req-reason" style={{ display: 'block', fontSize: '0.82rem', fontWeight: 600, marginBottom: 4 }}>Motivo (opcional)</label>
-              <input id="req-reason" type="text" className="input" placeholder="Ej. Descanso anual" value={reason} onChange={(e) => setReason(e.target.value)} />
+              <input id="req-reason" type="text" className="input" placeholder="Ej. Descanso anual" value={reason} onChange={(e) => { setReason(e.target.value); resetOperationKey(); }} />
             </div>
             <div style={{ display: 'flex', alignItems: 'flex-end' }}>
               <button type="submit" className="btn btn-primary" disabled={submitting} style={{ width: '100%' }}>
