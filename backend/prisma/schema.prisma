@@ -341,3 +341,13 @@ model DailyReport {
 
   @@map("daily_reports")
 }
+
+model RevokedToken {
+  id        Int      @id @default(autoincrement())
+  tokenHash String   @unique @map("token_hash") @db.VarChar(64)
+  expiresAt DateTime @map("expires_at") @db.DateTime(0)
+  createdAt DateTime @default(now()) @map("created_at") @db.DateTime(0)
+
+  @@index([expiresAt], map: "idx_revoked_tokens_expires")
+  @@map("revoked_tokens")
+}

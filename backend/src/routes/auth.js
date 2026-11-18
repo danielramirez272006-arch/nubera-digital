@@ -71,7 +71,7 @@ authRouter.post(
   '/logout',
   requireAuth,
   asyncHandler(async (req, res) => {
-    revokeToken(req.token);
+    await revokeToken(req.token);
     res.json({ status: 'ok', message: 'Sesión cerrada correctamente.' });
   })
 );

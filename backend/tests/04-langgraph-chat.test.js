@@ -65,6 +65,8 @@ test('Stage 5: LangGraph.js multi-agent routing, citations, RBAC, no-backing & c
     assert.ok(!/sí es posible|puedes usarlos el próximo año/i.test(mixed.data.answer));
     assert.ok(mixed.data.citations.length >= 1);
     assert.equal(mixed.data.outcome, 'resuelta');
+    assert.equal(mixed.data.needs_hr_escalation, true);
+    assert.ok(mixed.data.suggested_ticket_summary);
 
     // 2. Dato personal: próximo pago
     const pay = await apiJson(baseUrl, '/api/chat', {

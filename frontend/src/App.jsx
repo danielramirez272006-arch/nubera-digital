@@ -1,17 +1,26 @@
-import React from 'react';
+import React, { Suspense, lazy } from 'react';
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { AuthProvider, useAuth } from './AuthContext';
 import ErrorBoundary from './components/ErrorBoundary';
 import PortalLayout from './components/PortalLayout';
 import LoginPage from './pages/LoginPage';
-import ConsultasPage from './pages/ConsultasPage';
-import MisDatosPage from './pages/MisDatosPage';
-import MisTicketsPage from './pages/MisTicketsPage';
-import DashboardPage from './pages/DashboardPage';
-import ReportesPage from './pages/ReportesPage';
-import SolicitudesPage from './pages/SolicitudesPage';
-import TicketsPage from './pages/TicketsPage';
-import DocumentosPage from './pages/DocumentosPage';
+
+const ConsultasPage = lazy(() => import('./pages/ConsultasPage'));
+const MisDatosPage = lazy(() => import('./pages/MisDatosPage'));
+const MisTicketsPage = lazy(() => import('./pages/MisTicketsPage'));
+const DashboardPage = lazy(() => import('./pages/DashboardPage'));
+const ReportesPage = lazy(() => import('./pages/ReportesPage'));
+const SolicitudesPage = lazy(() => import('./pages/SolicitudesPage'));
+const TicketsPage = lazy(() => import('./pages/TicketsPage'));
+const DocumentosPage = lazy(() => import('./pages/DocumentosPage'));
+
+function PageLoader() {
+  return (
+    <div style={{ padding: '2rem', color: 'var(--text-secondary)', fontSize: '0.95rem' }}>
+      Cargando módulo...
+    </div>
+  );
+}
 
 function ProtectedRoute({ children, requiredRole = null }) {
   const { user, loading } = useAuth();
@@ -28,7 +37,11 @@ function ProtectedRoute({ children, requiredRole = null }) {
   if (requiredRole && user.role !== requiredRole) {
     return <Navigate to={user.role === 'rrhh' ? '/dashboard' : '/consultas'} replace />;
   }
-  return <PortalLayout>{children}</PortalLayout>;
+  return (
+    <PortalLayout>
+      <Suspense fallback={<PageLoader />}>{children}</Suspense>
+    </PortalLayout>
+  );
 }
 
 function DefaultRedirect() {

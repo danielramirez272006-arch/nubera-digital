@@ -37,7 +37,7 @@ function serializeChatLog(log, suggestedSummary = null) {
     citations: Array.isArray(log.citationsJson) ? log.citationsJson : [],
     latency_ms: log.latencyMs,
     outcome: log.outcome,
-    needs_hr_escalation: log.outcome === 'escalada_rrhh',
+    needs_hr_escalation: log.outcome === 'escalada_rrhh' || Boolean(suggestedSummary),
     suggested_ticket_summary: suggestedSummary,
     helpful: log.helpful,
     created_at: log.createdAt,

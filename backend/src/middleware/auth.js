@@ -1,21 +1,29 @@
+import crypto from 'node:crypto';
 import jwt from 'jsonwebtoken';
 import bcrypt from 'bcryptjs';
 import { config } from '../config.js';
 import { prisma } from '../db/prisma.js';
 import { AppError } from './errorHandler.js';
 
-// Map<token, expiresAtMs> para poder purgar tokens ya expirados y evitar crecimiento indefinido
+// Caché en memoria <tokenHash, expiresAtMs> respaldada por tabla MySQL `revoked_tokens`
 const revokedTokens = new Map();
 
+function hashToken(token) {
+  return crypto.createHash('sha256').update(token).digest('hex');
+}
+
 function purgeExpiredRevokedTokens(now = Date.now()) {
-  for (const [token, expiresAt] of revokedTokens.entries()) {
+  for (const [tokenHash, expiresAt] of revokedTokens.entries()) {
     if (expiresAt <= now) {
-      revokedTokens.delete(token);
+      revokedTokens.delete(tokenHash);
     }
   }
 }
 
-setInterval(() => purgeExpiredRevokedTokens(), 15 * 60 * 1000).unref();
+setInterval(() => {
+  purgeExpiredRevokedTokens();
+  prisma.revokedToken.deleteMany({ where: { expiresAt: { lte: new Date() } } }).catch(() => {});
+}, 15 * 60 * 1000).unref();
 
 export async function verifyPassword(plain, hash) {
   return bcrypt.compare(plain, hash);
@@ -29,6 +37,7 @@ export function createAccessToken(employee) {
   const nowSec = Math.floor(Date.now() / 1000);
   return jwt.sign(
     {
+      jti: crypto.randomUUID(),
       sub: String(employee.id),
       email: employee.email,
       role: employee.role,
@@ -43,17 +52,25 @@ export function createAccessToken(employee) {
   );
 }
 
-export function revokeToken(token) {
+export async function revokeToken(token) {
   if (!token) return;
   const decoded = jwt.decode(token);
   const expMs =
     decoded && typeof decoded === 'object' && typeof decoded.exp === 'number'
       ? decoded.exp * 1000
       : Date.now() + config.JWT_EXPIRE_MINUTES * 60 * 1000;
+  const tokenHash = hashToken(token);
+
   if (revokedTokens.size >= 5000) {
     purgeExpiredRevokedTokens();
   }
-  revokedTokens.set(token, expMs);
+  revokedTokens.set(tokenHash, expMs);
+
+  await prisma.revokedToken.upsert({
+    where: { tokenHash },
+    create: { tokenHash, expiresAt: new Date(expMs) },
+    update: { expiresAt: new Date(expMs) },
+  });
 }
 
 export async function requireAuth(req, _res, next) {
@@ -63,7 +80,16 @@ export async function requireAuth(req, _res, next) {
     if (!token) {
       throw new AppError(401, 'Sesión no autenticada. Inicia sesión para continuar.');
     }
-    if (revokedTokens.has(token)) {
+    const tokenHash = hashToken(token);
+    if (revokedTokens.has(tokenHash)) {
+      throw new AppError(401, 'La sesión fue cerrada. Inicia sesión nuevamente.');
+    }
+    const persistedRevoked = await prisma.revokedToken.findUnique({
+      where: { tokenHash },
+      select: { expiresAt: true },
+    });
+    if (persistedRevoked) {
+      revokedTokens.set(tokenHash, persistedRevoked.expiresAt.getTime());
       throw new AppError(401, 'La sesión fue cerrada. Inicia sesión nuevamente.');
     }
 
