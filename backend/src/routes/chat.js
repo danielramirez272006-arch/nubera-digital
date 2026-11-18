@@ -10,7 +10,7 @@ import { processChatQuery } from '../agents/orchestrator.js';
 export const chatRouter = Router();
 
 const chatBodySchema = z.object({
-  question: z.string().trim().min(2, 'Escribe una pregunta válida.').max(1500),
+  question: z.string().trim().min(1, 'Escribe un mensaje para continuar.').max(1500),
   session_id: z.string().max(64).optional().nullable(),
 });
 

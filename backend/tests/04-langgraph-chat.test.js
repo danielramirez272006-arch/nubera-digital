@@ -89,6 +89,15 @@ test('Stage 5: LangGraph.js multi-agent routing, citations, RBAC, no-backing & c
     assert.ok(pol.data.citations.length >= 1);
     assert.equal(pol.data.outcome, 'resuelta');
 
+    // 3b. Seguimiento corto (1-2 caracteres) conserva contexto de conversación sin error de validación
+    const shortFollowUp = await apiJson(baseUrl, '/api/chat', {
+      method: 'POST',
+      token: anaToken,
+      body: { question: '?', session_id: testSession },
+    });
+    assert.equal(shortFollowUp.status, 200);
+    assert.equal(shortFollowUp.data.outcome, 'resuelta');
+
     // 4. Sin respaldo documental -> escalación sugerida
     const noBack = await apiJson(baseUrl, '/api/chat', {
       method: 'POST',
@@ -139,7 +148,7 @@ test('Stage 5: LangGraph.js multi-agent routing, citations, RBAC, no-backing & c
       token: anaToken,
     });
     assert.equal(hist.status, 200);
-    assert.equal(hist.data.length, 6);
+    assert.equal(hist.data.length, 7);
 
     const fb = await apiJson(baseUrl, `/api/chat/${mixed.data.id}/feedback`, {
       method: 'POST',

@@ -5,8 +5,13 @@ import { config } from '../config.js';
  * Retorna null si no hay API key configurada o si ocurre un error,
  * permitiendo respaldo determinista sin interrumpir el portal.
  */
-export async function generateChatCompletion({ systemPrompt, userPrompt, maxTokens = 450 }) {
+export async function generateChatCompletion({ systemPrompt, userPrompt, history = [], maxTokens = 450 }) {
   const provider = (config.LLM_PROVIDER || 'none').toLowerCase();
+  const safeHistory = Array.isArray(history)
+    ? history
+        .filter((m) => m && (m.role === 'user' || m.role === 'assistant') && typeof m.content === 'string' && m.content.trim())
+        .map((m) => ({ role: m.role, content: m.content.slice(0, 800) }))
+    : [];
 
   if (provider === 'deepseek' && config.DEEPSEEK_API_KEY) {
     const url = `${config.DEEPSEEK_BASE_URL.replace(/\/+$/, '')}/chat/completions`;
@@ -21,6 +26,7 @@ export async function generateChatCompletion({ systemPrompt, userPrompt, maxToke
           model: config.LLM_MODEL || 'deepseek-chat',
           messages: [
             { role: 'system', content: systemPrompt },
+            ...safeHistory,
             { role: 'user', content: userPrompt },
           ],
           temperature: 0.1,
@@ -49,6 +55,7 @@ export async function generateChatCompletion({ systemPrompt, userPrompt, maxToke
           model: config.LLM_MODEL || 'gpt-4o-mini',
           messages: [
             { role: 'system', content: systemPrompt },
+            ...safeHistory,
             { role: 'user', content: userPrompt },
           ],
           temperature: 0.1,

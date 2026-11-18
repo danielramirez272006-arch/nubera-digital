@@ -54,9 +54,10 @@ export async function retrievePolicyChunks(prisma, question, topK = 4) {
   return scored.slice(0, topK);
 }
 
-export async function answerPolicyQuestion(prisma, question) {
-  const matches = await retrievePolicyChunks(prisma, question, 5);
-  const qTokens = new Set(tokenize(question));
+export async function answerPolicyQuestion(prisma, question, { history = [], retrievalQuery = question } = {}) {
+  const effectiveQ = retrievalQuery || question;
+  const matches = await retrievePolicyChunks(prisma, effectiveQ, 5);
+  const qTokens = new Set(tokenize(effectiveQ));
 
   let hasLexicalGrounding = false;
   if (matches.length > 0) {
@@ -119,6 +120,7 @@ export async function answerPolicyQuestion(prisma, question) {
   const llmAnswer = await generateChatCompletion({
     systemPrompt: `${loadedPrompt}\n\nRegla estricta: responde usando ÚNICAMENTE los fragmentos proporcionados.`,
     userPrompt: `Pregunta: ${question}\n\nFragmentos oficiales:\n${rawContext}`,
+    history,
   });
 
   return {

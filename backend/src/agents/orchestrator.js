@@ -97,6 +97,8 @@ export function classifyIntent(question) {
 
 const AgentState = Annotation.Root({
   question: Annotation(),
+  effectiveQuestion: Annotation(),
+  history: Annotation(),
   qNorm: Annotation(),
   intent: Annotation(),
   topic: Annotation(),
@@ -112,10 +114,26 @@ const AgentState = Annotation.Root({
 
 function buildOrchestratorGraph(prisma, currentUser) {
   async function classifyNode(state) {
-    const qNorm = normalizeText(state.question);
+    const rawNorm = normalizeText(state.question);
+    const words = rawNorm.split(' ').filter(Boolean);
+    const hasExplicitSignal =
+      isThirdPartyQuery(rawNorm) ||
+      REPORT_SIGNALS.some((r) => rawNorm.includes(r)) ||
+      PERSONAL_PRONOUNS.some((p) => rawNorm.includes(p)) ||
+      POLICY_SIGNALS.some((p) => rawNorm.includes(p));
+
+    const prevTurns = Array.isArray(state.history) ? state.history : [];
+    const lastUserTurn = [...prevTurns].reverse().find((m) => m.role === 'user');
+    const effectiveQuestion =
+      !hasExplicitSignal && words.length <= 5 && lastUserTurn?.content
+        ? `${lastUserTurn.content} ${state.question}`
+        : state.question;
+
+    const qNorm = normalizeText(effectiveQuestion);
     return {
+      effectiveQuestion,
       qNorm,
-      intent: classifyIntent(state.question),
+      intent: classifyIntent(effectiveQuestion),
       topic: detectTopic(qNorm),
     };
   }
@@ -184,7 +202,7 @@ function buildOrchestratorGraph(prisma, currentUser) {
   }
 
   async function employeeNode(state) {
-    const res = await answerEmployeeQuestion(prisma, currentUser, state.question);
+    const res = await answerEmployeeQuestion(prisma, currentUser, state.effectiveQuestion || state.question);
     return {
       agentUsed: 'Agente de Datos del Colaborador',
       answer: res.answer,
@@ -196,7 +214,10 @@ function buildOrchestratorGraph(prisma, currentUser) {
   }
 
   async function policyNode(state) {
-    const res = await answerPolicyQuestion(prisma, state.question);
+    const res = await answerPolicyQuestion(prisma, state.question, {
+      history: state.history || [],
+      retrievalQuery: state.effectiveQuestion || state.question,
+    });
     return {
       agentUsed: 'Agente de Políticas',
       answer: res.answer,
@@ -208,9 +229,10 @@ function buildOrchestratorGraph(prisma, currentUser) {
   }
 
   async function mixedNode(state) {
+    const effectiveQ = state.effectiveQuestion || state.question;
     const [empRes, matches, orchPrompt] = await Promise.all([
-      answerEmployeeQuestion(prisma, currentUser, state.question),
-      retrievePolicyChunks(prisma, state.question, 3),
+      answerEmployeeQuestion(prisma, currentUser, effectiveQ),
+      retrievePolicyChunks(prisma, effectiveQ, 3),
       loadPromptText(
         'orchestrator',
         'Eres el Orquestador de RRHH de Nubera Digital. Integra en una sola respuesta clara y coherente los datos personales autorizados y las reglas oficiales.'
@@ -260,6 +282,7 @@ function buildOrchestratorGraph(prisma, currentUser) {
           `Pregunta: ${state.question}\n\n` +
           `Datos personales autorizados:\n${empRes.answer}\n\n` +
           `Fragmentos de políticas:\n${contextTxt}`,
+        history: state.history || [],
         maxTokens: 450,
       });
 
@@ -389,9 +412,28 @@ export async function processChatQuery(prisma, currentUser, question, sessionId 
     update: {},
   });
 
+  const previousLogs = await prisma.chatLog.findMany({
+    where: {
+      sessionId: convId,
+      employeeId: currentUser.id,
+      outcome: { not: 'denegada' },
+    },
+    orderBy: { id: 'desc' },
+    take: 4,
+    select: { question: true, answer: true },
+  });
+  const history = previousLogs
+    .reverse()
+    .flatMap((l) => [
+      { role: 'user', content: l.question },
+      { role: 'assistant', content: l.answer },
+    ]);
+
   const graph = buildOrchestratorGraph(prisma, currentUser);
   const finalState = await graph.invoke({
     question,
+    effectiveQuestion: question,
+    history,
     qNorm: '',
     intent: 'politica',
     topic: 'Otras consultas',
