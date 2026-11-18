@@ -245,11 +245,17 @@ function buildOrchestratorGraph(prisma, currentUser) {
       }
 
       const contextTxt = snippets.join('\n');
+      const expiredDirective = empRes.is_deadline_expired
+        ? ` ATENCIÓN OBLIGATORIA: Al ${empRes.today_str} (America/Mexico_City), el plazo de 6 meses (${empRes.deadline_str}) YA VENCIÓ. ` +
+          'No afirmes que puede usarlos el próximo año, no sugieras pedir antes de una fecha pasada y no garantices prórroga ni ampliación; explica que el plazo venció y deriva a Operaciones de RRHH.'
+        : '';
+
       const integrated = await generateChatCompletion({
         systemPrompt:
           `${orchPrompt}\n\n` +
           'Integra en una sola respuesta clara y coherente los datos personales autorizados del colaborador ' +
-          'y las reglas de las políticas oficiales. Conserva exactamente todas las cifras personales proporcionadas y no te contradigas.',
+          'y las reglas de las políticas oficiales. Conserva exactamente todas las cifras personales proporcionadas y no te contradigas.' +
+          expiredDirective,
         userPrompt:
           `Pregunta: ${state.question}\n\n` +
           `Datos personales autorizados:\n${empRes.answer}\n\n` +
@@ -258,9 +264,15 @@ function buildOrchestratorGraph(prisma, currentUser) {
       });
 
       const hasAllFigures = integrated && toolFigures.every((fig) => !fig || integrated.includes(fig));
-      const answer = hasAllFigures
-        ? integrated
-        : `${empRes.answer}\n\n**Regla aplicable en política:**\n${matches[0].chunk.content}`;
+      const falsePromiseOnExpired =
+        empRes.is_deadline_expired &&
+        integrated &&
+        /(sí\s+(es\s+posible|puedes\s+usarlos)|antes\s+del\s+\d{2}\/\d{2}\/2026)/i.test(integrated);
+
+      const answer =
+        hasAllFigures && !falsePromiseOnExpired
+          ? integrated
+          : `${empRes.answer}\n\n**Regla aplicable en política:**\n${matches[0].chunk.content}`;
 
       return {
         agentUsed: 'Orquestador (Datos del Colaborador + Políticas)',
@@ -268,7 +280,7 @@ function buildOrchestratorGraph(prisma, currentUser) {
         toolFigures,
         answer,
         outcome: 'resuelta',
-        needsHrEscalation: false,
+        needsHrEscalation: Boolean(empRes.is_deadline_expired),
       };
     }
 

@@ -109,8 +109,11 @@ test('Stage 6: Analyst report metrics vs SQL, home_office exclusion, idempotent 
     assert.equal(fetched.status, 200);
     assert.equal(fetched.data.absences_today, gen2.data.absences_today);
 
-    // 6. Scheduler cron se inicializa y detiene sin errores
-    const tasks = startSchedulers(prisma);
+    // 6. Scheduler cron se inicializa, recupera pendientes del día y detiene sin errores
+    const { recoverMissedRuns } = await import('../src/services/scheduler.js');
+    const rec = await recoverMissedRuns(prisma);
+    assert.ok(rec.date);
+    const tasks = startSchedulers(prisma, { runCatchUp: false });
     assert.equal(tasks.length, 2);
     stopSchedulers();
   } finally {

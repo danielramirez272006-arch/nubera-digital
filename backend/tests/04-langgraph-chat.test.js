@@ -59,7 +59,10 @@ test('Stage 5: LangGraph.js multi-agent routing, citations, RBAC, no-backing & c
     assert.equal(mixed.status, 200);
     assert.equal(mixed.data.intent, 'mixta');
     assert.ok(mixed.headers.get('x-trace-id'));
-    assert.ok(mixed.data.answer.includes('9'));
+    assert.ok(mixed.data.answer.includes('10'));
+    assert.match(mixed.data.answer, /venci[oó]|vencido/i);
+    assert.match(mixed.data.answer, /RRHH/i);
+    assert.ok(!/sí es posible|puedes usarlos el próximo año/i.test(mixed.data.answer));
     assert.ok(mixed.data.citations.length >= 1);
     assert.equal(mixed.data.outcome, 'resuelta');
 

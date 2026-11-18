@@ -76,6 +76,12 @@ export async function answerEmployeeQuestion(prisma, currentUser, question) {
     const pStartStr = formatDmy(vacInfo.periodStart);
     const pEndStr = formatDmy(vacInfo.periodEnd);
     const deadStr = formatDmy(vacInfo.sixMonthDeadline);
+    const todayStr = formatDmy(today);
+    const expired = vacInfo.isDeadlineExpired && Number(balance.availableDays) > 0;
+
+    const deadlineNote = expired
+      ? `Conforme a RH-01, las vacaciones deben programarse dentro de los **6 meses posteriores al aniversario** (fecha límite: **${deadStr}**). **Al corte del ${todayStr} (America/Mexico_City), ese plazo ya venció**, por lo que no se puede asegurar su uso el próximo año ni garantizar una ampliación automática; **tu caso debe revisarse directamente con Operaciones de RRHH** (puedes abrir un ticket desde el portal).`
+      : `Conforme a RH-01, el periodo se asigna por aniversario (puede cruzar diciembre) y debe programarse dentro de los **6 meses posteriores al aniversario** (fecha límite de referencia: **${deadStr}**).`;
 
     return {
       answer:
@@ -83,12 +89,12 @@ export async function answerEmployeeQuestion(prisma, currentUser, question) {
         `(${vacInfo.yearsOfService} años cumplidos; último aniversario: **${annivStr}**). ` +
         `En tu periodo vigente (**${pStartStr} al ${pEndStr}**) tienes **${availStr} días disponibles** ` +
         `de vacaciones (**${entStr} días asignados** según tabla RH-01, **${usedStr} disfrutados** y ` +
-        `**${pendStr} días reservados en solicitudes pendientes**). ` +
-        `Conforme a RH-01, el periodo se asigna por aniversario (puede cruzar diciembre) y debe programarse ` +
-        `dentro de los **6 meses posteriores al aniversario** (fecha límite de referencia: **${deadStr}**; ` +
-        `si existen días pendientes, Operaciones de RRHH revisa el caso para agendar su disfrute).`,
+        `**${pendStr} días reservados en solicitudes pendientes**). ${deadlineNote}`,
       data_type: 'vacaciones',
       tool_figures: [availStr, entStr, pendStr],
+      is_deadline_expired: expired,
+      deadline_str: deadStr,
+      today_str: todayStr,
     };
   }
 

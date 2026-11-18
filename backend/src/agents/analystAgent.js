@@ -8,7 +8,7 @@ import { addDaysUtc, parseIsoDateUtc, toIsoDate } from '../services/vacationRule
 
 export const ABSENCE_TYPES = ['vacaciones', 'permiso_con_goce', 'permiso_sin_goce', 'incapacidad'];
 
-let analystRunning = false;
+const inFlightReports = new Map();
 
 function toLocalDateStr(dateObj, tz = config.TIMEZONE) {
   return new Intl.DateTimeFormat('en-CA', {
@@ -88,21 +88,21 @@ async function buildExecutiveSummary(metrics) {
 }
 
 export async function generateDailyReport(prisma, targetDateInput = null) {
-  if (analystRunning) {
-    throw new Error('La generación de reporte diario ya se encuentra en ejecución.');
+  const targetDate = targetDateInput
+    ? typeof targetDateInput === 'string'
+      ? parseIsoDateUtc(targetDateInput)
+      : targetDateInput
+    : todayInTimezone();
+
+  const targetIso = toIsoDate(targetDate);
+  if (inFlightReports.has(targetIso)) {
+    return inFlightReports.get(targetIso);
   }
-  analystRunning = true;
 
-  try {
-    const targetDate = targetDateInput
-      ? typeof targetDateInput === 'string'
-        ? parseIsoDateUtc(targetDateInput)
-        : targetDateInput
-      : todayInTimezone();
-
-    const targetIso = toIsoDate(targetDate);
-    const start30 = addDaysUtc(targetDate, -29);
-    const monthStart = parseIsoDateUtc(`${targetIso.slice(0, 8)}01`);
+  const runPromise = (async () => {
+    try {
+      const start30 = addDaysUtc(targetDate, -29);
+      const monthStart = parseIsoDateUtc(`${targetIso.slice(0, 8)}01`);
     const prevDayIso = toIsoDate(addDaysUtc(targetDate, -1));
 
     // Consultas base en paralelo
@@ -398,7 +398,11 @@ export async function generateDailyReport(prisma, targetDateInput = null) {
       },
       update: reportData,
     });
-  } finally {
-    analystRunning = false;
-  }
+    } finally {
+      inFlightReports.delete(targetIso);
+    }
+  })();
+
+  inFlightReports.set(targetIso, runPromise);
+  return runPromise;
 }

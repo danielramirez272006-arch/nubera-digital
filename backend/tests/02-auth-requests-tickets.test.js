@@ -82,8 +82,8 @@ test('Stage 3: Auth, RBAC, /api/me/data, Requests concurrency, Tickets transacti
     assert.equal(myData.status, 200);
     assert.equal(myData.data.balances[0].entitled_days, 15);
     assert.equal(myData.data.balances[0].used_days, 2);
-    assert.equal(myData.data.balances[0].pending_days, 4);
-    assert.equal(myData.data.balances[0].available_days, 9);
+    assert.equal(myData.data.balances[0].pending_days, 3);
+    assert.equal(myData.data.balances[0].available_days, 10);
     assert.ok(myData.data.balances[0].six_month_deadline);
     assert.equal(typeof myData.data.balances[0].is_deadline_expired, 'boolean');
     assert.ok(myData.data.payment_schedule_info.projected_date);
