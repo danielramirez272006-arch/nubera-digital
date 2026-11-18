@@ -1,0 +1,11 @@
+{
+  "name": "nubera-digital-rrhh",
+  "private": true,
+  "scripts": {
+    "test:deepseek": "npm --prefix backend run test:deepseek",
+    "test:drive": "npm --prefix backend run test:drive",
+    "test:backend": "npm --prefix backend test",
+    "test:frontend": "npm --prefix frontend test",
+    "eval:45": "node evaluation/run_eval_45.mjs"
+  }
+}
