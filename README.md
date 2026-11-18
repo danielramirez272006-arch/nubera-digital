@@ -78,13 +78,19 @@ docker compose up --build
 
 ---
 
-## Pruebas y evaluación
+## Pruebas, migración y reconciliación
 
 ```bash
-# Pruebas de integración del backend Node
+# Aplicar migraciones Prisma y vista previa / aplicación de reconciliación de saldos
 cd backend
+npx prisma migrate deploy
+npm run db:reconcile:preview
+npm run db:reconcile:apply
+
+# Pruebas de integración del backend Node (incluye suite aislada en base temporal)
 npm test
 
 # Evaluación integral aislada (45 preguntas + ciclo Drive + SQL + RBAC)
+cd ..
 node evaluation/run_eval_45.mjs
 ```
