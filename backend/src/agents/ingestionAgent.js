@@ -412,11 +412,11 @@ async function extractFilesSafely(drive, fileList) {
   return { docs, fileErrors };
 }
 
-export async function fetchRealDriveDocuments({ useChanges = false } = {}) {
+export async function fetchRealDriveDocuments({ useChanges = false, persistToken = false } = {}) {
   const auth = await getDriveAuthClient();
   const drive = google.drive({ version: 'v3', auth });
   const folderId = config.GOOGLE_DRIVE_FOLDER_ID;
-  const syncState = await readDriveSyncState();
+  const syncState = useChanges || persistToken ? await readDriveSyncState() : {};
   const savedToken = syncState[folderId];
 
   if (useChanges && savedToken) {
@@ -455,8 +455,10 @@ export async function fetchRealDriveDocuments({ useChanges = false } = {}) {
         currentToken = res.data.nextPageToken || undefined;
       } while (currentToken);
 
-      syncState[folderId] = newStartPageToken;
-      await writeDriveSyncState(syncState);
+      if (persistToken) {
+        syncState[folderId] = newStartPageToken;
+        await writeDriveSyncState(syncState);
+      }
 
       const { docs, fileErrors } = await extractFilesSafely(drive, changedFilesMap.values());
       return { mode: 'incremental', docs, deletedIds: [...deletedIds], fileErrors };
@@ -484,14 +486,16 @@ export async function fetchRealDriveDocuments({ useChanges = false } = {}) {
     pageToken = res.data.nextPageToken || undefined;
   } while (pageToken);
 
-  try {
-    const startRes = await drive.changes.getStartPageToken();
-    if (startRes?.data?.startPageToken) {
-      syncState[folderId] = startRes.data.startPageToken;
-      await writeDriveSyncState(syncState);
+  if (persistToken) {
+    try {
+      const startRes = await drive.changes.getStartPageToken();
+      if (startRes?.data?.startPageToken) {
+        syncState[folderId] = startRes.data.startPageToken;
+        await writeDriveSyncState(syncState);
+      }
+    } catch {
+      // No crítico si el token de cambios no está disponible
     }
-  } catch {
-    // No crítico si el token de cambios no está disponible
   }
 
   const { docs, fileErrors } = await extractFilesSafely(drive, files);
@@ -573,7 +577,10 @@ export async function syncDrivePolicies(
 
       try {
         const activeCountBefore = await prisma.driveDocument.count({ where: { status: 'activo' } });
-        const fetched = await fetchRealDriveDocuments({ useChanges: activeCountBefore > 0 && !forceReembed });
+        const fetched = await fetchRealDriveDocuments({
+          useChanges: activeCountBefore > 0 && !forceReembed,
+          persistToken: true,
+        });
         syncMode = fetched.mode || 'full';
         sourceDocs = fetched.docs || [];
         incrementalDeletedIds = fetched.deletedIds || [];

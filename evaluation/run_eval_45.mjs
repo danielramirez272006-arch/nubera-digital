@@ -155,8 +155,10 @@ async function main() {
     await prodPrisma.$executeRawUnsafe('SET FOREIGN_KEY_CHECKS = 1');
 
     // Apuntar runtime del backend Node a la base aislada sin alterar producción ni Drive real
+    const evalLlmProvider = process.env.EVAL_LLM_PROVIDER || 'none';
+    const noWrite = process.argv.includes('--no-write');
     process.env.DATABASE_URL = evalUrl;
-    process.env.LLM_PROVIDER = 'none';
+    process.env.LLM_PROVIDER = evalLlmProvider;
     process.env.GOOGLE_DRIVE_ENABLED = 'false';
 
     const [{ createApp }, dbMod, { syncDrivePolicies }] = await Promise.all([
@@ -220,7 +222,8 @@ async function main() {
       }
 
       if (ok) passed += 1;
-      const sourceLabel = cits.length > 0 ? cits.map((c) => c.policy_code).join(', ') : res.data.agent_used || '';
+      const uniqueCodes = [...new Set(cits.map((c) => c.policy_code).filter(Boolean))];
+      const sourceLabel = uniqueCodes.length > 0 ? uniqueCodes.join(', ') : res.data.agent_used || '';
       results.push({
         idx: i + 1,
         role,
@@ -297,7 +300,7 @@ async function main() {
       '',
       `- **Fecha de ejecución:** \`${new Date().toISOString()}\` (${process.version})`,
       `- **Stack evaluado:** Node.js + Express + Prisma ORM + MySQL + LangGraph.js (\`backend/\`)`,
-      `- **Modo de evaluación:** Determinista (\`LLM_PROVIDER=none\`, \`GOOGLE_DRIVE_ENABLED=false\`)`,
+      `- **Modo de evaluación:** ${evalLlmProvider === 'none' ? 'Determinista' : 'LLM real'} (\`LLM_PROVIDER=${evalLlmProvider}\`, \`GOOGLE_DRIVE_ENABLED=false\`)`,
       `- **Base de datos utilizada:** Base temporal aislada \`${evalDb}\` (clonada y eliminada al finalizar)`,
       `- **Aciertos:** ${passed}/45 (**${acc.toFixed(1)}%**) — Meta >= 80%`,
       `- **Consultas < 8 s:** ${under8s}/45 (**${fastPct.toFixed(1)}%**) — Meta >= 90%`,
@@ -317,8 +320,10 @@ async function main() {
       '',
     ];
 
-    const outPath = path.join(__dirname, 'EVALUATION_RESULTS.md');
-    await fs.writeFile(outPath, mdLines.join('\n'), 'utf8');
+    if (!noWrite) {
+      const outPath = path.join(__dirname, 'EVALUATION_RESULTS.md');
+      await fs.writeFile(outPath, mdLines.join('\n'), 'utf8');
+    }
 
     console.log(
       `Eval 45 JS (isolated ${evalDb}): ${passed}/45 (${acc.toFixed(1)}%), p90=${p90Ms}ms, <8s=${fastPct.toFixed(1)}%, leaks=${leaks}, rbac=${rbacDash && rbacDocs && rbacReqs}, conc=${concOk}, dashSql=${dashSqlOk}`

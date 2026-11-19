@@ -1,20 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import http from 'node:http';
-import { createApp } from '../src/app.js';
-import { prisma } from '../src/db/prisma.js';
-import { startSchedulers, stopSchedulers } from '../src/services/scheduler.js';
-
-function startTestServer() {
-  const app = createApp();
-  const server = http.createServer(app);
-  return new Promise((resolve) => {
-    server.listen(0, '127.0.0.1', () => {
-      const addr = server.address();
-      resolve({ server, baseUrl: `http://127.0.0.1:${addr.port}` });
-    });
-  });
-}
+import { Prisma } from '@prisma/client';
+import { createIsolatedTestEnv } from './helpers/isolatedDb.js';
+import { startSchedulers, stopSchedulers, recoverMissedRuns } from '../src/services/scheduler.js';
 
 async function apiJson(baseUrl, path, { method = 'GET', token = null, body = undefined } = {}) {
   const headers = { 'Content-Type': 'application/json' };
@@ -27,57 +15,99 @@ async function apiJson(baseUrl, path, { method = 'GET', token = null, body = und
   return { status: res.status, data: await res.json() };
 }
 
-test('Stage 6: Analyst report metrics vs SQL, home_office exclusion, idempotent upsert & cron scheduler', async () => {
-  const { server, baseUrl } = await startTestServer();
-  try {
-    const anaLogin = await apiJson(baseUrl, '/api/auth/login', {
-      method: 'POST',
-      body: { email: 'ana.garcia@nubera.mx', password: 'Colaborador123!' },
-    });
-    const anaToken = anaLogin.data.access_token;
+test('Stage 6 (Isolated DB): Analyst report metrics vs SQL, home_office exclusion, idempotent upsert & cron scheduler', async () => {
+  const env = await createIsolatedTestEnv({ tag: 'stage6' });
+  const { prisma, baseUrl, users, balances } = env;
 
-    const lauraLogin = await apiJson(baseUrl, '/api/auth/login', {
-      method: 'POST',
-      body: { email: 'laura.mendoza@nubera.mx', password: 'Rrhh123!' },
+  try {
+    // Sembrar ausencias (vacaciones aprobada + home_office aprobada + pendiente >3 días) y saldo >20 días
+    await prisma.leaveRequest.createMany({
+      data: [
+        {
+          employeeId: users.collab.id,
+          balanceId: balances.balCollab2026.id,
+          requestType: 'vacaciones',
+          startDate: new Date('2026-11-15'),
+          endDate: new Date('2026-11-17'),
+          daysCount: new Prisma.Decimal('3.00'),
+          status: 'aprobada',
+          reason: 'Ausencia aprobada de prueba',
+        },
+        {
+          employeeId: users.otherCollab.id,
+          requestType: 'home_office',
+          startDate: new Date('2026-11-16'),
+          endDate: new Date('2026-11-16'),
+          daysCount: new Prisma.Decimal('1.00'),
+          status: 'aprobada',
+          reason: 'Home office excluido de ausencias',
+        },
+        {
+          employeeId: users.otherCollab.id,
+          balanceId: balances.balOther2026.id,
+          requestType: 'vacaciones',
+          startDate: new Date('2026-12-01'),
+          endDate: new Date('2026-12-02'),
+          daysCount: new Prisma.Decimal('2.00'),
+          status: 'pendiente',
+          createdAt: new Date('2026-11-10T10:00:00.000Z'),
+        },
+      ],
     });
-    const lauraToken = lauraLogin.data.access_token;
+
+    await prisma.balance.update({
+      where: { id: balances.balOther2026.id },
+      data: { availableDays: new Prisma.Decimal('22.00'), entitledDays: new Prisma.Decimal('24.00') },
+    });
+
+    const collabLogin = await apiJson(baseUrl, '/api/auth/login', {
+      method: 'POST',
+      body: { email: users.collab.email, password: 'TestCollab123!' },
+    });
+    const collabToken = collabLogin.data.access_token;
+
+    const hrLogin = await apiJson(baseUrl, '/api/auth/login', {
+      method: 'POST',
+      body: { email: users.hrDirector.email, password: 'TestHr123!' },
+    });
+    const hrToken = hrLogin.data.access_token;
 
     // 1. RBAC dashboard
-    assert.equal((await apiJson(baseUrl, '/api/dashboard/dates', { token: anaToken })).status, 403);
-    assert.equal((await apiJson(baseUrl, '/api/dashboard/report', { token: anaToken })).status, 403);
+    assert.equal((await apiJson(baseUrl, '/api/dashboard/dates', { token: collabToken })).status, 403);
+    assert.equal((await apiJson(baseUrl, '/api/dashboard/report', { token: collabToken })).status, 403);
     assert.equal(
-      (await apiJson(baseUrl, '/api/dashboard/report/generate', { method: 'POST', token: anaToken })).status,
+      (await apiJson(baseUrl, '/api/dashboard/report/generate', { method: 'POST', token: collabToken })).status,
       403
     );
 
-    // 2. Fechas existentes
-    const datesRes = await apiJson(baseUrl, '/api/dashboard/dates', { token: lauraToken });
-    assert.equal(datesRes.status, 200);
-    assert.ok(Array.isArray(datesRes.data) && datesRes.data.length >= 1);
-
-    // 3. Generar y recalcular reporte de forma idempotente para 2026-11-16
+    // 2. Generar y recalcular reporte de forma idempotente para 2026-11-16
     const targetDate = '2026-11-16';
     const gen1 = await apiJson(baseUrl, `/api/dashboard/report/generate?report_date=${targetDate}`, {
       method: 'POST',
-      token: lauraToken,
+      token: hrToken,
     });
     assert.equal(gen1.status, 200);
 
     const gen2 = await apiJson(baseUrl, `/api/dashboard/report/generate?report_date=${targetDate}`, {
       method: 'POST',
-      token: lauraToken,
+      token: hrToken,
     });
     assert.equal(gen2.status, 200);
     assert.equal(gen2.data.absences_today, gen1.data.absences_today);
     assert.equal(gen2.data.pending_requests, gen1.data.pending_requests);
+    assert.equal(gen2.data.pending_over_3_days, 1);
 
-    // Verificar exactamente 1 fila por report_date en MySQL
+    const datesRes = await apiJson(baseUrl, '/api/dashboard/dates', { token: hrToken });
+    assert.equal(datesRes.status, 200);
+    assert.ok(Array.isArray(datesRes.data) && datesRes.data.includes(targetDate));
+
+    // Verificar exactamente 1 fila por report_date en MySQL aislado
     const rowCount = await prisma.dailyReport.count({
       where: { reportDate: new Date(`${targetDate}T00:00:00.000Z`) },
     });
     assert.equal(rowCount, 1);
 
-    // 4. Validar cifras contra SQL independiente
+    // 3. Validar cifras contra SQL independiente
     const sqlAbs = await prisma.$queryRaw`
       SELECT COUNT(DISTINCT employee_id) AS cnt
       FROM leave_requests
@@ -87,6 +117,7 @@ test('Stage 6: Analyst report metrics vs SQL, home_office exclusion, idempotent 
         AND end_date >= '2026-11-16'
     `;
     assert.equal(gen2.data.absences_today, Number(sqlAbs[0].cnt));
+    assert.equal(gen2.data.absences_today, 1);
 
     const sqlOver20 = await prisma.$queryRaw`
       SELECT COUNT(DISTINCT b.employee_id) AS cnt
@@ -95,29 +126,28 @@ test('Stage 6: Analyst report metrics vs SQL, home_office exclusion, idempotent 
       WHERE e.status = 'activo' AND b.available_days > 20
     `;
     assert.equal(gen2.data.employees_over_20_vacation_days, Number(sqlOver20[0].cnt));
+    assert.equal(gen2.data.employees_over_20_vacation_days, 1);
 
-    // Confirmar que Home Office NO figura en absences_by_type ni en today_absent_records
+    // Confirmar que Home Office NO figura en absences_by_type
     const types = (gen2.data.payload_json?.absences_by_type || []).map((x) => x.name.toLowerCase());
     assert.ok(!types.some((t) => t.includes('home')));
     const depts = gen2.data.payload_json?.departments_catalog || [];
-    assert.ok(depts.length >= 5, 'Debe listar todos los departamentos activos');
+    assert.ok(depts.length >= 3, 'Debe listar los departamentos activos de la plantilla de prueba');
 
-    // 5. Verificar GET /api/dashboard/report devuelve la misma cifra
+    // 4. Verificar GET /api/dashboard/report devuelve la misma cifra
     const fetched = await apiJson(baseUrl, `/api/dashboard/report?report_date=${targetDate}`, {
-      token: lauraToken,
+      token: hrToken,
     });
     assert.equal(fetched.status, 200);
     assert.equal(fetched.data.absences_today, gen2.data.absences_today);
 
-    // 6. Scheduler cron se inicializa, recupera pendientes del día y detiene sin errores
-    const { recoverMissedRuns } = await import('../src/services/scheduler.js');
+    // 5. Scheduler cron se inicializa, recupera pendientes del día y detiene sin errores
     const rec = await recoverMissedRuns(prisma);
     assert.ok(rec.date);
     const tasks = startSchedulers(prisma, { runCatchUp: false });
     assert.equal(tasks.length, 2);
     stopSchedulers();
   } finally {
-    await prisma.$disconnect();
-    await new Promise((resolve) => server.close(resolve));
+    await env.cleanup();
   }
 });

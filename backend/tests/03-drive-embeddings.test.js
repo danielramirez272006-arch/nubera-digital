@@ -1,21 +1,13 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import http from 'node:http';
-import { createApp } from '../src/app.js';
-import { prisma } from '../src/db/prisma.js';
+import { createIsolatedTestEnv } from './helpers/isolatedDb.js';
 import { embedText, cosineSimilarity } from '../src/agents/embeddings.js';
-import { sanitizeDocumentText, extractDocumentMetadata, splitIntoSections } from '../src/agents/ingestionAgent.js';
-
-function startTestServer() {
-  const app = createApp();
-  const server = http.createServer(app);
-  return new Promise((resolve) => {
-    server.listen(0, '127.0.0.1', () => {
-      const addr = server.address();
-      resolve({ server, baseUrl: `http://127.0.0.1:${addr.port}` });
-    });
-  });
-}
+import {
+  sanitizeDocumentText,
+  extractDocumentMetadata,
+  splitIntoSections,
+  syncDrivePolicies,
+} from '../src/agents/ingestionAgent.js';
 
 async function apiJson(baseUrl, path, { method = 'GET', token = null, body = undefined } = {}) {
   const headers = { 'Content-Type': 'application/json' };
@@ -28,8 +20,67 @@ async function apiJson(baseUrl, path, { method = 'GET', token = null, body = und
   return { status: res.status, data: await res.json() };
 }
 
-test('Stage 4: Embeddings, chunking, sanitization, real Google Drive sync & idempotency', async () => {
-  const { server, baseUrl } = await startTestServer();
+function buildIsolatedDocsFixture() {
+  return [
+    {
+      drive_file_id: 'iso-doc-rh01',
+      policy_code: 'RH-01',
+      title: 'RH-01 Vacaciones y descansos obligatorios',
+      mime_type: 'application/vnd.google-apps.document',
+      version: '1.1',
+      effective_date: '2026-11-17',
+      owner: 'Operaciones de RRHH',
+      drive_url: 'https://drive.google.com/file/d/iso-doc-rh01/view',
+      sections: [
+        {
+          section: 'Reglas de vacaciones',
+          content: 'Solicita vacaciones con 10 días hábiles de anticipación. Nubera otorga 15 días al primer año y prima vacacional del 30%.',
+        },
+      ],
+    },
+    {
+      drive_file_id: 'iso-doc-rh09',
+      policy_code: 'RH-09',
+      title: 'RH-09 Código de conducta y protocolo de denuncias.pdf',
+      mime_type: 'application/pdf',
+      version: '1.1',
+      effective_date: '2026-11-17',
+      owner: 'Comité de Ética',
+      drive_url: 'https://drive.google.com/file/d/iso-doc-rh09/view',
+      sections: [
+        {
+          section: 'Protocolo de denuncias',
+          content: 'El Comité de Ética acusa recibo dentro de dos días hábiles y protege la confidencialidad.',
+        },
+      ],
+    },
+    {
+      drive_file_id: 'iso-sheet-rh12',
+      policy_code: 'RH-12',
+      title: 'Nubera Digital | Calendarios de RRHH 2026',
+      mime_type: 'application/vnd.google-apps.spreadsheet',
+      version: '1.1',
+      effective_date: '2026-01-01',
+      owner: 'Nómina',
+      drive_url: 'https://drive.google.com/file/d/iso-sheet-rh12/view',
+      sections: [
+        {
+          section: 'Pestaña: Pagos 2026',
+          content: '52 pagos semanales los viernes | Pago semanal | 2026-11-20 | Programado',
+        },
+        {
+          section: 'Pestaña: Feriados 2026',
+          content: '2026-11-16 | Aniversario de la Revolución Mexicana | Descanso obligatorio',
+        },
+      ],
+    },
+  ];
+}
+
+test('Stage 4 (Isolated DB): Embeddings, chunking, sanitization, Drive sync & idempotency', async () => {
+  const env = await createIsolatedTestEnv({ tag: 'stage4' });
+  const { prisma, baseUrl, users } = env;
+
   try {
     // 1. Embeddings 384-dim y similitud semántica en español
     const vVac = embedText('¿Cuántos días de vacaciones me corresponden por antigüedad?');
@@ -57,57 +108,55 @@ test('Stage 4: Embeddings, chunking, sanitization, real Google Drive sync & idem
     }
 
     // 3. Autenticación y RBAC de documentos / sincronización
-    const anaLogin = await apiJson(baseUrl, '/api/auth/login', {
+    const collabLogin = await apiJson(baseUrl, '/api/auth/login', {
       method: 'POST',
-      body: { email: 'ana.garcia@nubera.mx', password: 'Colaborador123!' },
+      body: { email: users.collab.email, password: 'TestCollab123!' },
     });
-    const anaToken = anaLogin.data.access_token;
+    const collabToken = collabLogin.data.access_token;
 
-    const lauraLogin = await apiJson(baseUrl, '/api/auth/login', {
+    const hrLogin = await apiJson(baseUrl, '/api/auth/login', {
       method: 'POST',
-      body: { email: 'laura.mendoza@nubera.mx', password: 'Rrhh123!' },
+      body: { email: users.hrDirector.email, password: 'TestHr123!' },
     });
-    const lauraToken = lauraLogin.data.access_token;
+    const hrToken = hrLogin.data.access_token;
 
-    const forbiddenDocs = await apiJson(baseUrl, '/api/documents', { token: anaToken });
+    const forbiddenDocs = await apiJson(baseUrl, '/api/documents', { token: collabToken });
     assert.equal(forbiddenDocs.status, 403);
-    const forbiddenSync = await apiJson(baseUrl, '/api/ingestion/sync', { method: 'POST', token: anaToken });
+    const forbiddenSync = await apiJson(baseUrl, '/api/ingestion/sync', { method: 'POST', token: collabToken });
     assert.equal(forbiddenSync.status, 403);
 
-    // 4. Sincronización real con Google Drive (11 archivos incluyendo PDF RH-09 y Sheet con 2 pestañas)
-    const sync1 = await apiJson(baseUrl, '/api/ingestion/sync', { method: 'POST', token: lauraToken });
-    assert.equal(sync1.status, 200);
-    assert.equal(sync1.data.status, 'ok');
-    assert.equal(sync1.data.sync_stats.deleted, 0);
+    // 4. Sincronización aislada (Docs + PDF + Google Sheets con 2 pestañas) e idempotencia
+    const fixtureDocs = buildIsolatedDocsFixture();
+    const sync1 = await syncDrivePolicies(prisma, { overrideDocs: fixtureDocs, deleteMissing: true });
+    assert.equal(sync1.added, 3);
+    assert.equal(sync1.updated, 0);
+    assert.equal(sync1.deleted, 0);
 
-    // 5. Segunda sincronización inmediata: idempotente (11 sin cambios, 0 agregados/actualizados/eliminados)
-    const sync2 = await apiJson(baseUrl, '/api/ingestion/sync', { method: 'POST', token: lauraToken });
-    assert.equal(sync2.status, 200);
-    assert.equal(sync2.data.sync_stats.added, 0);
-    assert.equal(sync2.data.sync_stats.updated, 0);
-    assert.equal(sync2.data.sync_stats.deleted, 0);
-    assert.equal(sync2.data.sync_stats.unchanged, 11);
+    const sync2 = await syncDrivePolicies(prisma, { overrideDocs: fixtureDocs, deleteMissing: true });
+    assert.equal(sync2.added, 0);
+    assert.equal(sync2.updated, 0);
+    assert.equal(sync2.deleted, 0);
+    assert.equal(sync2.unchanged, 3);
 
-    // 6. Verificar catálogo y ambas pestañas de Google Sheets
-    const docsRes = await apiJson(baseUrl, '/api/documents', { token: lauraToken });
+    // 5. Verificar catálogo y ambas pestañas de Google Sheets en la base aislada
+    const docsRes = await apiJson(baseUrl, '/api/documents', { token: hrToken });
     assert.equal(docsRes.status, 200);
-    assert.equal(docsRes.data.total_active_documents, 11);
-    assert.ok(docsRes.data.total_chunks > 30);
+    assert.equal(docsRes.data.total_active_documents, 3);
+    assert.equal(docsRes.data.total_chunks, 4);
 
     const calDoc = docsRes.data.documents.find((d) =>
       d.mime_type === 'application/vnd.google-apps.spreadsheet'
     );
-    assert.ok(calDoc, 'Debe existir el Google Sheet de calendarios en Drive');
+    assert.ok(calDoc, 'Debe existir el Google Sheet de calendarios en la base aislada');
 
     const calContent = await apiJson(baseUrl, `/api/documents/${calDoc.drive_file_id}/content`, {
-      token: anaToken,
+      token: collabToken,
     });
     assert.equal(calContent.status, 200);
     const sectionNames = calContent.data.sections.map((s) => s.section);
     assert.ok(sectionNames.some((s) => s.includes('Pagos 2026')));
     assert.ok(sectionNames.some((s) => s.includes('Feriados 2026')));
   } finally {
-    await prisma.$disconnect();
-    await new Promise((resolve) => server.close(resolve));
+    await env.cleanup();
   }
 });
