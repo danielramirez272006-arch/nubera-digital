@@ -13,7 +13,7 @@ import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const ROOT_DIR = path.resolve(__dirname, '..');
+const ROOT_DIR = path.resolve(__dirname, '../..');
 const BACKEND_DIR = path.join(ROOT_DIR, 'backend');
 
 const EVAL_CASES = [
@@ -105,7 +105,7 @@ async function main() {
 
   // Importar PrismaClient conectado inicialmente a prod para leer snapshot y crear DB aislada
   process.env.DATABASE_URL = prodUrl;
-  const { PrismaClient } = await import('../backend/node_modules/@prisma/client/index.js');
+  const { PrismaClient } = await import('../../backend/node_modules/@prisma/client/index.js');
   const prodPrisma = new PrismaClient({ datasources: { db: { url: prodUrl } } });
 
   let evalPrisma = null;
@@ -162,9 +162,9 @@ async function main() {
     process.env.GOOGLE_DRIVE_ENABLED = 'false';
 
     const [{ createApp }, dbMod, { syncDrivePolicies }] = await Promise.all([
-      import('../backend/src/app.js'),
-      import('../backend/src/db/prisma.js'),
-      import('../backend/src/agents/ingestionAgent.js'),
+      import('../../backend/src/app.js'),
+      import('../../backend/src/db/prisma.js'),
+      import('../../backend/src/agents/ingestionAgent.js'),
     ]);
     evalPrisma = dbMod.prisma;
 

@@ -6,6 +6,7 @@
     "test:drive": "npm --prefix backend run test:drive",
     "test:backend": "npm --prefix backend test",
     "test:frontend": "npm --prefix frontend test",
-    "eval:45": "node evaluation/run_eval_45.mjs"
+    "eval:45": "node docs/evaluation/run_eval_45.mjs",
+    "eval:45:official": "node docs/evaluation/run_eval_45_official.mjs"
   }
 }

@@ -15,16 +15,31 @@ Portal interno de Recursos Humanos para **Nubera Digital** (México), construido
 │   ├── src/                # agents/, services/, routes/, middleware/, db/
 │   └── tests/              # Pruebas de integración ordenadas (node --test)
 ├── prompts/                # Prompts versionados por agente + registry.json
-├── evaluation/
-│   ├── run_eval_45.mjs     # Evaluación aislada en JS (45 preguntas + RBAC + Drive + concurrencia + SQL)
-│   └── EVALUATION_RESULTS.md
 ├── docs/
-│   ├── ARQUITECTURA_Y_DISENO.md
-│   └── GUION_DEMO.md
+│   ├── INFORME_INVESTIGACION_RRHH.pdf     # Informe de investigación (9 páginas) + .md
+│   ├── INFORME_TECNICO_NUBERA_DIGITAL.pdf # Informe técnico y diagrama (10 páginas) + .md
+│   ├── politicas/                         # Políticas RH-01 a RH-10 + RH-09 PDF + Calendarios CSV
+│   ├── evaluation/                        # Banco oficial de 45 preguntas (CSV, resumen y scripts)
+│   ├── ARQUITECTURA_Y_DISENO.md           # Diagramas Mermaid de arquitectura y ER
+│   └── GUION_DEMO.md                      # Guion de demo (15 min) y video de respaldo (5 min)
 ├── .env.example
 ├── docker-compose.yml
 └── README.md
 ```
+
+---
+
+## Índice de entregables
+
+| Entregable | Archivo en repositorio |
+|---|---|
+| Informe de investigación (9 páginas) | [INFORME_INVESTIGACION_RRHH.pdf](docs/INFORME_INVESTIGACION_RRHH.pdf) · [Markdown](docs/INFORME_INVESTIGACION_RRHH.md) |
+| Políticas oficiales `RH-01` a `RH-10` y calendarios `RH-11`/`RH-12` | [docs/politicas/](docs/politicas/) |
+| Informe técnico (10 páginas) y diagrama de arquitectura | [INFORME_TECNICO_NUBERA_DIGITAL.pdf](docs/INFORME_TECNICO_NUBERA_DIGITAL.pdf) · [Markdown](docs/INFORME_TECNICO_NUBERA_DIGITAL.md) · [Diagramas](docs/ARQUITECTURA_Y_DISENO.md) |
+| Prompts versionados de los 7 agentes | [prompts/registry.json](prompts/registry.json) |
+| Evaluación oficial (25 originales + 20 propias) | [Resumen](docs/evaluation/EVALUATION_45_SUMMARY.md) · [CSV DeepSeek](docs/evaluation/EVALUATION_45_DEEPSEEK.csv) · [CSV Determinista](docs/evaluation/EVALUATION_45_DETERMINISTIC.csv) |
+| Guion de demostración y video de respaldo | [GUION_DEMO.md](docs/GUION_DEMO.md) |
+| Plantilla de entorno sin secretos | [.env.example](.env.example) |
 
 ---
 
